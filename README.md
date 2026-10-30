@@ -6,57 +6,140 @@ Proiect de hackathon (48h, 4 persoane). Planificarea turelor, zona angajatului, 
 Stack: **Next.js 15 (App Router) + TypeScript + Prisma 7 + PostgreSQL + Tailwind + Recharts**.
 Interfața este în română (texte în `src/lib/i18n/ro.ts`), codul în engleză.
 
-## Pornire rapidă
+## Cerințe
 
-Cerințe: Node.js 20+ (recomandat 22). Docker **nu** e necesar. Ollama e opțional.
+| Ce | Versiune | Obligatoriu? | De unde |
+|---|---|---|---|
+| **Node.js** | 20 sau mai nou (recomandat 22 LTS) | Da | https://nodejs.org → „LTS” |
+| **Git** | orice versiune recentă | Da | https://git-scm.com |
+| Ollama | ultima versiune | Nu (doar pentru AI) | https://ollama.com |
+| Docker Desktop | — | Nu (doar pentru varianta B) | https://www.docker.com |
 
-### Varianta A — fără Docker (recomandat pentru laptopurile echipei)
+Nu trebuie instalat PostgreSQL: vine ca pachet npm (`embedded-postgres`) la `npm install`.
+Toate dependențele proiectului (echivalentul unui `requirements.txt`) sunt în **`package.json`**, cu versiuni exacte în `package-lock.json`; `npm install` le instalează pe toate.
 
-PostgreSQL rulează „încorporat”, din pachetul npm `embedded-postgres` (binarele se descarcă la `npm install`,
-datele stau în folderul `.pgdata` din proiect).
+Verifică în terminal:
 
 ```bash
-cp .env.example .env            # pe Windows: copy .env.example .env
-npm install
-npm run local                   # pornește PostgreSQL + aplică migrațiile + (prima dată) seed + Next.js
+node -v      # trebuie să afișeze v20.x sau mai mare
+npm -v
+git --version
 ```
 
-Deschide http://localhost:3000. `Ctrl+C` oprește și aplicația, și baza de date.
+## Instalare (prima dată)
+
+Pașii sunt pentru Windows (PowerShell). Pe macOS/Linux folosește `cp` în loc de `copy`.
+
+**1. Clonează proiectul** (adresa o iei de pe GitHub, butonul verde „Code”):
+
+```bash
+git clone https://github.com/<organizatie>/<repo>.git
+cd <repo>
+```
+
+**2. Creează fișierul de configurare `.env`:**
+
+```bash
+copy .env.example .env
+```
+
+`.env` nu se urcă pe GitHub (e în `.gitignore`); fiecare își face copia lui.
+
+**3. (De obicei nu e nevoie) Portul bazei de date.** Implicit, baza de date folosește portul **5433**
+(`DATABASE_URL` din `.env`), ca să nu se lovească de un PostgreSQL deja instalat pe 5432.
+Schimbă-l doar dacă primești mesajul că portul 5433 e ocupat (de ex. în `localhost:5434`).
+
+**4. Instalează dependențele** (durează câteva minute prima dată; descarcă și PostgreSQL):
+
+```bash
+npm install
+```
+
+**5. Pornește tot:**
+
+```bash
+npm run local
+```
+
+Prima pornire creează baza de date în folderul `.pgdata`, aplică migrațiile și încarcă datele demo.
+Este gata când vezi `Seed complete.` și apoi `✓ Ready`. Deschide **http://localhost:3000**
+și intră cu `admin@aeroport.demo` / `Demo2026!` (vezi [Conturi demo](#conturi-demo)).
+
+Lasă terminalul deschis cât lucrezi. `Ctrl+C` oprește aplicația și baza de date.
+
+## Pornire zilnică
+
+```bash
+git pull           # ia modificările colegilor
+npm install        # doar dacă s-a schimbat package.json
+npm run local
+```
+
+Dacă un coleg a adăugat o migrație nouă, `npm run local` o aplică automat la pornire.
+
+## Comenzi utile
 
 | Comandă | Ce face |
 |---|---|
-| `npm run local` | baza de date + aplicația, într-un singur terminal |
-| `npm run local:db` | doar baza de date (apoi `npm run dev` în alt terminal) |
-| `npm run local:reset` | șterge `.pgdata` și o ia de la zero (migrații + seed) |
+| `npm run local` | pornește baza de date + aplicația (un singur terminal) |
+| `npm run local:db` | pornește doar baza de date (apoi `npm run dev` în alt terminal) |
+| `npm run local:reset` | șterge baza locală (`.pgdata`) și o reface de la zero, cu datele demo |
 | `npm run db:seed` | regenerează datele demo (cu baza pornită) |
+| `npm run db:migrate` | creează o migrație nouă după ce ai modificat `prisma/schema.prisma` (cu baza pornită) |
+| `npm run typecheck` | verifică tipurile TypeScript |
+| `npm run build` | build de producție (verificare înainte de demo) |
+| `npm run mock:ollama` | server AI simulat pe portul 11434, pentru test fără GPU |
+| `http://localhost:3000/api/health` | arată dacă baza de date și Ollama răspund |
 
-Dacă portul 5432 e ocupat (ai deja un PostgreSQL instalat), schimbă portul în `DATABASE_URL` din `.env`, de ex. `localhost:5433`.
+Datele demo sunt generate relativ la ziua în care rulezi seed-ul (2 săptămâni în urmă → 2 săptămâni înainte).
+Rulează `npm run db:seed` sau `npm run local:reset` înainte de prezentare.
 
-### Varianta B — cu Docker
+## AI cu Ollama (opțional)
+
+Pe calculatorul cu GPU (8 GB VRAM):
 
 ```bash
-cp .env.example .env
-docker compose up -d            # PostgreSQL 16 pe portul 5432
+ollama pull qwen3:8b
+```
+
+În `.env` setează `OLLAMA_MODEL` (implicit `qwen3:8b`; alternative: `llama3.1:8b`, `qwen2.5:7b`, `gemma3:4b`) și repornește `npm run local`.
+Dacă Ollama rulează pe alt calculator din rețea, pune adresa lui în `OLLAMA_BASE_URL`.
+
+Fără Ollama aplicația funcționează normal: chatul angajatului spune că asistentul nu e disponibil,
+iar „Cere sugestii AI” din simulare folosește sugestii generate prin reguli (marcate „Reguli”).
+
+## Varianta B: cu Docker în loc de PostgreSQL încorporat
+
+```bash
+copy .env.example .env
+docker compose up -d            # PostgreSQL pe portul 5433, la fel ca varianta A
 npm install
-npm run db:deploy               # aplică migrațiile
+npm run db:deploy
 npm run db:seed
 npm run dev
 ```
 
-Nu rula ambele variante în același timp (folosesc același port).
+Nu rula `npm run local` și Docker în același timp pe același port.
 
-AI (pe mașina cu GPU de 8 GB):
+## Probleme frecvente
 
-```bash
-ollama pull qwen3:8b            # sau llama3.1:8b / qwen2.5:7b / gemma3:4b
-# setează OLLAMA_MODEL în .env, apoi repornește `npm run dev`
-```
+| Mesaj | Cauză | Soluție |
+|---|---|---|
+| `Portul 5433 este deja folosit` | rulează deja `npm run local` în alt terminal, Docker sau alt program pe acel port | închide celălalt terminal / `docker compose down`, sau schimbă portul în `.env` (ex. `5434`) |
+| `... in encoding "UTF8" has no equivalent in encoding "WIN1252"` | baza a fost creată cu o versiune veche a scriptului | `npm run local:reset` |
+| `database system was not properly shut down` | baza nu a fost oprită curat data trecută | nimic, se repară singură |
+| `DeprecationWarning: Passing args to a child process...` | avertisment Node | poate fi ignorat |
+| `prisma migrate dev` raportează „drift” | migrația inițială a fost scrisă manual | `npm run local:reset` (șterge doar datele demo) |
+| `'node' is not recognized` | Node.js nu e instalat sau terminalul e deschis dinainte | instalează Node.js și redeschide terminalul |
+| Pagina se încarcă greu prima dată | Next.js compilează pagina la prima accesare | normal în modul dev |
 
-Fără Ollama, aplicația merge normal: chatul angajatului afișează „asistentul nu e disponibil”,
-iar „Cere sugestii AI” din simulare cade pe **sugestii prin reguli deterministe** (sursa „Reguli”).
-Pentru a testa fluxul complet de tool calling fără GPU: `npm run mock:ollama` (un server scriptat pe :11434, nu un model real).
+## Lucrul în echipă pe GitHub
 
-Verificare: `http://localhost:3000/api/health` arată dacă baza de date și Ollama răspund și ce modele sunt instalate.
+- Nu urcați `.env`, `.pgdata`, `node_modules`, `.next` (sunt deja în `.gitignore`).
+- Fiecare lucrează pe un branch: `git checkout -b nume/funcționalitate`, apoi Pull Request către `main`.
+- Modificări de schemă (`prisma/schema.prisma`): rulați `npm run db:migrate -- --name descriere` și urcați și folderul nou din `prisma/migrations/`.
+- Texte noi în interfață: adăugați-le în `src/lib/i18n/ro.ts`, nu direct în componente.
+- Înainte de push: `npm run typecheck`.
 
 ## Conturi demo
 
@@ -127,7 +210,6 @@ scripts/mock-ollama.mjs
 
 ## Note tehnice
 
-- Prisma 7 folosește clientul fără Rust (`@prisma/adapter-pg`), generat în `src/generated/prisma` (nu se comite).
-- Migrația inițială a fost scrisă manual (SQL) pentru că mediul de dezvoltare nu putea descărca engine-ul Prisma.
-  Dacă `npx prisma migrate dev` raportează „drift” la prima rulare, rulează `npm run db:reset` (șterge datele de dev și refă seed-ul).
+- Prisma 7 folosește clientul fără Rust (`@prisma/adapter-pg`), generat în `src/generated/prisma` la `npm install` (nu se comite).
+- Baza încorporată se creează cu `--encoding=UTF8 --locale=C` (`scripts/local.mjs`), ca diacriticele să funcționeze pe Windows.
 - Datele sunt stocate în UTC și afișate în `Europe/Bucharest` (`src/lib/time.ts`).

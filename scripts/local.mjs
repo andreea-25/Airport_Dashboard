@@ -32,6 +32,7 @@ const pg = new EmbeddedPostgres({
   password,
   port,
   persistent: true,
+  initdbFlags: ["--encoding=UTF8", "--locale=C"],
   onLog: (m) => pgLog.push(String(m)),
   onError: (m) => pgLog.push(String(m instanceof Error ? m.message : m)),
 });
