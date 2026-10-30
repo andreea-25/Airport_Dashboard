@@ -5,7 +5,8 @@
 //   npm run local:reset    -> delete the local database folder and start fresh
 import "dotenv/config";
 import { spawn } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import EmbeddedPostgres from "embedded-postgres";
 
@@ -23,7 +24,26 @@ const password = decodeURIComponent(url.password || "airport");
 const port = Number(url.port || 5432);
 const database = url.pathname.replace(/^\//, "") || "airport";
 
-const pg = new EmbeddedPostgres({ databaseDir: dataDir, user, password, port, persistent: true, onLog: () => {} });
+// keep PostgreSQL's own output so we can show it if something fails
+const pgLog = [];
+const pg = new EmbeddedPostgres({
+  databaseDir: dataDir,
+  user,
+  password,
+  port,
+  persistent: true,
+  onLog: (m) => pgLog.push(String(m)),
+  onError: (m) => pgLog.push(String(m instanceof Error ? m.message : m)),
+});
+
+function portIsFree(p) {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once("error", () => resolve(false));
+    srv.once("listening", () => srv.close(() => resolve(true)));
+    srv.listen(p, "127.0.0.1");
+  });
+}
 
 function run(cmd, cmdArgs) {
   return new Promise((resolve, reject) => {
@@ -61,18 +81,36 @@ async function stop(code = 0) {
 process.on("SIGINT", () => stop(0));
 process.on("SIGTERM", () => stop(0));
 
-const firstRun = !existsSync(path.join(dataDir, "PG_VERSION"));
+const initialised = existsSync(path.join(dataDir, "PG_VERSION"));
+const seededMarker = path.join(dataDir, ".seeded");
 try {
-  if (firstRun) {
+  if (!(await portIsFree(port))) {
+    throw new Error(
+      `Portul ${port} este deja folosit (probabil un PostgreSQL instalat pe calculator sau Docker).\n` +
+        `Soluție: în .env schimbă portul din DATABASE_URL, de ex. localhost:5433, apoi rulează din nou npm run local.`,
+    );
+  }
+  if (!initialised) {
     console.log("First run: initialising local PostgreSQL in .pgdata …");
     await pg.initialise();
   }
-  await pg.start();
+  try {
+    await pg.start();
+  } catch (e) {
+    throw new Error(`PostgreSQL nu a pornit.${e?.message ? " " + e.message : ""}`);
+  }
   console.log(`PostgreSQL running on localhost:${port} (user ${user}, database ${database})`);
-  if (firstRun) await pg.createDatabase(database);
+  try {
+    await pg.createDatabase(database);
+  } catch {
+    /* already exists */
+  }
 
   await run("npx", ["prisma", "migrate", "deploy"]);
-  if (firstRun || args.has("--seed")) await run("npx", ["tsx", "prisma/seed.ts"]);
+  if (!existsSync(seededMarker) || args.has("--seed")) {
+    await run("npx", ["tsx", "prisma/seed.ts"]);
+    writeFileSync(seededMarker, new Date().toISOString());
+  }
 
   if (args.has("--db-only")) {
     console.log("Database is ready. Press Ctrl+C to stop it.");
@@ -82,9 +120,11 @@ try {
     nextProc.on("exit", (code) => stop(code ?? 0));
   }
 } catch (e) {
-  console.error(e instanceof Error ? e.message : e);
-  if (String(e).includes("EADDRINUSE") || String(e).includes("port")) {
-    console.error(`Port ${port} may be in use (another PostgreSQL or Docker?). Change the port in DATABASE_URL in .env.`);
+  console.error("\n✖ " + (e instanceof Error ? e.message : String(e ?? "Eroare necunoscută")));
+  if (pgLog.length) {
+    console.error("\n--- Mesajele PostgreSQL ---");
+    console.error(pgLog.join("").trim().split(/\r?\n/).slice(-25).join("\n"));
+    console.error("---------------------------");
   }
   await stop(1);
 }
