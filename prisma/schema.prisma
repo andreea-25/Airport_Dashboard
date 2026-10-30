@@ -1,0 +1,368 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  EMPLOYEE
+}
+
+enum SkillType {
+  SKILL
+  CERTIFICATION
+}
+
+enum RequestType {
+  SHIFT_SWAP
+  LEAVE
+  CAREER_INFO
+  OTHER
+}
+
+enum RequestStatus {
+  SUBMITTED
+  IN_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum SuggestionStatus {
+  PENDING
+  APPLIED
+  DISMISSED
+}
+
+enum AiMode {
+  EMPLOYEE
+  ADMIN_SIM
+}
+
+model User {
+  id            String         @id @default(cuid())
+  email         String         @unique
+  passwordHash  String
+  role          Role           @default(EMPLOYEE)
+  employeeId    String?        @unique
+  employee      Employee?      @relation(fields: [employeeId], references: [id])
+  createdAt     DateTime       @default(now())
+  comments      ShiftComment[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  scenarios     Scenario[]
+  conversations AiConversation[]
+}
+
+model Department {
+  id           String                @id @default(cuid())
+  name         String
+  code         String                @unique
+  teams        Team[]
+  employees    Employee[]
+  positions    Position[]
+  shifts       Shift[]
+  staffing     StaffingRequirement[]
+  requirements LevelRequirement[]
+}
+
+model Team {
+  id           String     @id @default(cuid())
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id])
+  name         String
+  employees    Employee[]
+  shifts       Shift[]
+}
+
+model Level {
+  id           String             @id @default(cuid())
+  name         String             @unique
+  rank         Int                @unique
+  employees    Employee[]
+  requirements LevelRequirement[]
+}
+
+model Employee {
+  id          String            @id @default(cuid())
+  firstName   String
+  lastName    String
+  email       String            @unique
+  phone       String?
+  departmentId String
+  department  Department        @relation(fields: [departmentId], references: [id])
+  teamId      String?
+  team        Team?             @relation(fields: [teamId], references: [id])
+  levelId     String
+  level       Level             @relation(fields: [levelId], references: [id])
+  hireDate    DateTime
+  levelSince  DateTime
+  active      Boolean           @default(true)
+  user        User?
+  skills      EmployeeSkill[]
+  assignments ShiftAssignment[]
+  requests    Request[]
+}
+
+model Skill {
+  id          String             @id @default(cuid())
+  name        String             @unique
+  code        String             @unique
+  type        SkillType
+  hasExpiry   Boolean            @default(false)
+  employees   EmployeeSkill[]
+  requirements LevelRequirement[]
+  positions   PositionSkill[]
+}
+
+model EmployeeSkill {
+  employeeId  String
+  skillId     String
+  employee    Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  skill       Skill     @relation(fields: [skillId], references: [id])
+  proficiency Int       @default(1)
+  obtainedAt  DateTime
+  expiresAt   DateTime?
+
+  @@id([employeeId, skillId])
+}
+
+model LevelRequirement {
+  id                   String     @id @default(cuid())
+  departmentId         String
+  department           Department @relation(fields: [departmentId], references: [id])
+  levelId              String
+  level                Level      @relation(fields: [levelId], references: [id])
+  skillId              String
+  skill                Skill      @relation(fields: [skillId], references: [id])
+  minProficiency       Int        @default(1)
+  minMonthsInPrevLevel Int        @default(0)
+
+  @@unique([departmentId, levelId, skillId])
+}
+
+model Position {
+  id           String          @id @default(cuid())
+  departmentId String
+  department   Department      @relation(fields: [departmentId], references: [id])
+  name         String
+  skills       PositionSkill[]
+  assignments  ShiftAssignment[]
+}
+
+model PositionSkill {
+  positionId     String
+  skillId        String
+  position       Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  skill          Skill    @relation(fields: [skillId], references: [id])
+  minProficiency Int      @default(1)
+
+  @@id([positionId, skillId])
+}
+
+model ShiftTemplate {
+  id        String  @id @default(cuid())
+  name      String
+  startTime String // "06:00" local time
+  endTime   String // "14:00" local time
+  shifts    Shift[]
+}
+
+model Shift {
+  id           String            @id @default(cuid())
+  departmentId String
+  department   Department        @relation(fields: [departmentId], references: [id])
+  teamId       String?
+  team         Team?             @relation(fields: [teamId], references: [id])
+  date         DateTime          @db.Date
+  startAt      DateTime
+  endAt        DateTime
+  templateId   String?
+  template     ShiftTemplate?    @relation(fields: [templateId], references: [id])
+  assignments  ShiftAssignment[]
+  comments     ShiftComment[]
+
+  @@index([startAt])
+  @@index([departmentId, startAt])
+}
+
+model ShiftAssignment {
+  id         String    @id @default(cuid())
+  shiftId    String
+  shift      Shift     @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  employeeId String
+  employee   Employee  @relation(fields: [employeeId], references: [id])
+  positionId String?
+  position   Position? @relation(fields: [positionId], references: [id])
+  isLead     Boolean   @default(false)
+
+  @@unique([shiftId, employeeId])
+}
+
+model StaffingRequirement {
+  id           String     @id @default(cuid())
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id])
+  dayOfWeek    Int // 1 = Monday ... 7 = Sunday (ISO)
+  startHour    Int // local hour 0..23
+  endHour      Int // exclusive, 1..24
+  minStaff     Int
+
+  @@index([departmentId, dayOfWeek])
+}
+
+model ShiftComment {
+  id        String         @id @default(cuid())
+  shiftId   String
+  shift     Shift          @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User           @relation(fields: [authorId], references: [id])
+  body      String
+  createdAt DateTime       @default(now())
+  parentId  String?
+  parent    ShiftComment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies   ShiftComment[] @relation("CommentReplies")
+}
+
+model Request {
+  id            String        @id @default(cuid())
+  employeeId    String
+  employee      Employee      @relation(fields: [employeeId], references: [id])
+  type          RequestType
+  payload       Json
+  status        RequestStatus @default(SUBMITTED)
+  createdByAI   Boolean       @default(false)
+  adminResponse String?
+  createdAt     DateTime      @default(now())
+  resolvedAt    DateTime?
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  type      String
+  refId     String?
+  message   String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id])
+  entity    String
+  entityId  String
+  action    String
+  diff      Json?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// ---------- Simulation (fully separate from real data) ----------
+
+model Scenario {
+  id             String                     @id @default(cuid())
+  name           String
+  createdById    String
+  createdBy      User                       @relation(fields: [createdById], references: [id])
+  periodStart    DateTime
+  periodEnd      DateTime
+  baseSnapshotAt DateTime                   @default(now())
+  notes          String?
+  createdAt      DateTime                   @default(now())
+  shifts         ScenarioShift[]
+  assignments    ScenarioAssignment[]
+  overrides      ScenarioEmployeeOverride[]
+  changes        ScenarioChange[]
+  suggestions    ScenarioSuggestion[]
+  conversations  AiConversation[]
+}
+
+model ScenarioShift {
+  id            String               @id @default(cuid())
+  scenarioId    String
+  scenario      Scenario             @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  sourceShiftId String?
+  departmentId  String
+  teamId        String?
+  startAt       DateTime
+  endAt         DateTime
+  assignments   ScenarioAssignment[]
+
+  @@index([scenarioId])
+}
+
+model ScenarioAssignment {
+  id              String        @id @default(cuid())
+  scenarioId      String
+  scenario        Scenario      @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  scenarioShiftId String
+  scenarioShift   ScenarioShift @relation(fields: [scenarioShiftId], references: [id], onDelete: Cascade)
+  employeeId      String
+  positionId      String?
+  isLead          Boolean       @default(false)
+
+  @@index([scenarioId])
+}
+
+model ScenarioEmployeeOverride {
+  scenarioId   String
+  scenario     Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  employeeId   String
+  teamId       String?
+  departmentId String?
+  levelId      String?
+
+  @@id([scenarioId, employeeId])
+}
+
+model ScenarioChange {
+  id         String   @id @default(cuid())
+  scenarioId String
+  scenario   Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  type       String
+  payload    Json
+  inverse    Json?
+  createdAt  DateTime @default(now())
+}
+
+model ScenarioSuggestion {
+  id              String           @id @default(cuid())
+  scenarioId      String
+  scenario        Scenario         @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  source          String           @default("AI")
+  changes         Json
+  rationale       String
+  estimatedImpact Json?
+  status          SuggestionStatus @default(PENDING)
+  createdAt       DateTime         @default(now())
+}
+
+// ---------- AI ----------
+
+model AiConversation {
+  id         String      @id @default(cuid())
+  userId     String
+  user       User        @relation(fields: [userId], references: [id])
+  mode       AiMode
+  scenarioId String?
+  scenario   Scenario?   @relation(fields: [scenarioId], references: [id], onDelete: SetNull)
+  createdAt  DateTime    @default(now())
+  messages   AiMessage[]
+}
+
+model AiMessage {
+  id             String         @id @default(cuid())
+  conversationId String
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String
+  content        String
+  toolCalls      Json?
+  createdAt      DateTime       @default(now())
+}
