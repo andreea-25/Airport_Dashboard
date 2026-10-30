@@ -8,16 +8,42 @@ Interfața este în română (texte în `src/lib/i18n/ro.ts`), codul în englez�
 
 ## Pornire rapidă
 
-Cerințe: Node.js 20+ (recomandat 22), Docker Desktop, (opțional) Ollama.
+Cerințe: Node.js 20+ (recomandat 22). Docker **nu** e necesar. Ollama e opțional.
+
+### Varianta A — fără Docker (recomandat pentru laptopurile echipei)
+
+PostgreSQL rulează „încorporat”, din pachetul npm `embedded-postgres` (binarele se descarcă la `npm install`,
+datele stau în folderul `.pgdata` din proiect).
 
 ```bash
 cp .env.example .env            # pe Windows: copy .env.example .env
-docker compose up -d            # PostgreSQL 16 pe portul 5432
-npm install                     # rulează și `prisma generate`
-npm run db:deploy               # aplică migrațiile
-npm run db:seed                 # date fictive: ~80 angajați, 5 săptămâni de ture, scenariu demo
-npm run dev                     # http://localhost:3000
+npm install
+npm run local                   # pornește PostgreSQL + aplică migrațiile + (prima dată) seed + Next.js
 ```
+
+Deschide http://localhost:3000. `Ctrl+C` oprește și aplicația, și baza de date.
+
+| Comandă | Ce face |
+|---|---|
+| `npm run local` | baza de date + aplicația, într-un singur terminal |
+| `npm run local:db` | doar baza de date (apoi `npm run dev` în alt terminal) |
+| `npm run local:reset` | șterge `.pgdata` și o ia de la zero (migrații + seed) |
+| `npm run db:seed` | regenerează datele demo (cu baza pornită) |
+
+Dacă portul 5432 e ocupat (ai deja un PostgreSQL instalat), schimbă portul în `DATABASE_URL` din `.env`, de ex. `localhost:5433`.
+
+### Varianta B — cu Docker
+
+```bash
+cp .env.example .env
+docker compose up -d            # PostgreSQL 16 pe portul 5432
+npm install
+npm run db:deploy               # aplică migrațiile
+npm run db:seed
+npm run dev
+```
+
+Nu rula ambele variante în același timp (folosesc același port).
 
 AI (pe mașina cu GPU de 8 GB):
 
