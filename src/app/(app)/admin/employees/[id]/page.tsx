@@ -7,19 +7,23 @@ import { skillGap } from "@/lib/sim/scenario";
 import EmployeeForm from "@/components/admin/EmployeeForm";
 import SkillEditor from "@/components/admin/SkillEditor";
 import SkillGapView from "@/components/SkillGapView";
+import ReadinessPanel from "@/components/team/ReadinessPanel";
+import { loadTeamData, panelProps } from "@/lib/team/readiness";
 
 export default async function EmployeeDetail({ params }: { params: Promise<{ id: string }> }) {
   await requireAdminPage();
   const { id } = await params;
   const e = await prisma.employee.findUnique({ where: { id }, include: { skills: { include: { skill: true }, orderBy: { skill: { name: "asc" } } }, user: true } });
   if (!e) notFound();
-  const [departments, teams, levels, skills, gap] = await Promise.all([
+  const [departments, teams, levels, skills, gap, teamData] = await Promise.all([
     prisma.department.findMany({ orderBy: { name: "asc" } }),
     prisma.team.findMany({ orderBy: { name: "asc" } }),
     prisma.level.findMany({ orderBy: { rank: "asc" } }),
     prisma.skill.findMany({ orderBy: { name: "asc" } }),
     skillGap(id),
+    loadTeamData(),
   ]);
+  const panel = panelProps(teamData, id, 30);
   const d = (x: Date | null) => (x ? x.toISOString().slice(0, 10) : null);
   return (
     <div className="space-y-5">
@@ -30,7 +34,7 @@ export default async function EmployeeDetail({ params }: { params: Promise<{ id:
           <section className="card card-pad">
             <h2 className="h2 mb-3">{ro.admin.editEmployee}</h2>
             <EmployeeForm
-              employee={{ id: e.id, firstName: e.firstName, lastName: e.lastName, email: e.email, phone: e.phone, departmentId: e.departmentId, teamId: e.teamId, levelId: e.levelId, hireDate: d(e.hireDate)!, active: e.active }}
+              employee={{ id: e.id, firstName: e.firstName, lastName: e.lastName, email: e.email, phone: e.phone, departmentId: e.departmentId, teamId: e.teamId, levelId: e.levelId, hireDate: d(e.hireDate)!, contractEndDate: d(e.contractEndDate), active: e.active }}
               departments={departments}
               teams={teams}
               levels={levels}
@@ -45,10 +49,18 @@ export default async function EmployeeDetail({ params }: { params: Promise<{ id:
             />
           </section>
         </div>
-        <section className="card card-pad h-fit">
-          <h2 className="h2 mb-3">{ro.profile.career}</h2>
-          <SkillGapView gap={gap} />
-        </section>
+        <div className="space-y-5">
+          {panel && (
+            <section className="card card-pad">
+              <h2 className="h2 mb-3">{ro.team.readiness}</h2>
+              <ReadinessPanel {...panel} showSolutionsLink />
+            </section>
+          )}
+          <section className="card card-pad h-fit">
+            <h2 className="h2 mb-3">{ro.profile.career}</h2>
+            <SkillGapView gap={gap} />
+          </section>
+        </div>
       </div>
     </div>
   );

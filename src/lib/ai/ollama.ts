@@ -36,7 +36,7 @@ export async function ollamaChat(messages: OllamaMessage[], tools: ToolDef[]): P
         think: false, // qwen3: skip the reasoning trace, we only want the answer / tool calls
         options: { num_ctx: numCtx, temperature: 0.2 },
       }),
-      signal: AbortSignal.timeout(180_000),
+      signal: AbortSignal.timeout(Number(process.env.OLLAMA_TIMEOUT_MS || 300_000)),
     });
   } catch (e) {
     throw new AiUnavailableError(`Ollama nu răspunde la ${baseUrl}: ${(e as Error).message}`);

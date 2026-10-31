@@ -6,7 +6,7 @@ import { ro } from "@/lib/i18n/ro";
 
 type Opt = { id: string; name: string };
 type Props = {
-  employee?: { id: string; firstName: string; lastName: string; email: string; phone: string | null; departmentId: string; teamId: string | null; levelId: string; hireDate: string; active: boolean };
+  employee?: { id: string; firstName: string; lastName: string; email: string; phone: string | null; departmentId: string; teamId: string | null; levelId: string; hireDate: string; contractEndDate?: string | null; active: boolean };
   departments: Opt[];
   teams: (Opt & { departmentId: string })[];
   levels: Opt[];
@@ -23,6 +23,7 @@ export default function EmployeeForm({ employee, departments, teams, levels }: P
     teamId: employee?.teamId ?? "",
     levelId: employee?.levelId ?? levels[0]?.id ?? "",
     hireDate: employee?.hireDate ?? new Date().toISOString().slice(0, 10),
+    contractEndDate: employee?.contractEndDate ?? "",
     createAccount: true,
   });
   const [msg, setMsg] = useState<string | null>(null);
@@ -55,6 +56,7 @@ export default function EmployeeForm({ employee, departments, teams, levels }: P
           </select>
         </Field>
         <Field label={ro.admin.hireDate}><input className="input" type="date" value={f.hireDate} onChange={set("hireDate")} /></Field>
+        <Field label={ro.team.contractEnd}><input className="input" type="date" value={f.contractEndDate} onChange={set("contractEndDate")} /></Field>
       </div>
       {!employee && (
         <label className="flex items-center gap-2 text-sm">

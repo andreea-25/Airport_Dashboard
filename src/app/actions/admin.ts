@@ -22,6 +22,7 @@ const employeeSchema = z.object({
   teamId: z.string().optional().nullable(),
   levelId: z.string().min(1),
   hireDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  contractEndDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable().or(z.literal("")),
 });
 
 export async function saveEmployee(id: string | null, input: z.input<typeof employeeSchema> & { createAccount?: boolean }): Promise<Result> {
@@ -32,7 +33,13 @@ export async function saveEmployee(id: string | null, input: z.input<typeof empl
       const team = await prisma.team.findUnique({ where: { id: data.teamId } });
       if (!team || team.departmentId !== data.departmentId) return { error: "Echipa nu aparține departamentului ales." };
     }
-    const values = { ...data, teamId: data.teamId || null, phone: data.phone || null, hireDate: dateOnly(data.hireDate) };
+    const values = {
+      ...data,
+      teamId: data.teamId || null,
+      phone: data.phone || null,
+      hireDate: dateOnly(data.hireDate),
+      contractEndDate: data.contractEndDate ? dateOnly(data.contractEndDate) : null,
+    };
     if (id) {
       const before = await prisma.employee.findUniqueOrThrow({ where: { id } });
       const levelChanged = before.levelId !== values.levelId;

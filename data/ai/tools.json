@@ -1,0 +1,372 @@
+{
+  "EMPLOYEE": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_my_shifts",
+        "description": "Turele utilizatorului curent (DOAR ale lui). Pentru perioade obișnuite folosește `period` — datele le calculează sistemul. Pentru o zi anume folosește from/to.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "period": {
+              "type": "string",
+              "enum": [
+                "azi",
+                "maine",
+                "weekend",
+                "saptamana_aceasta",
+                "saptamana_viitoare",
+                "urmatoarele_14_zile"
+              ],
+              "description": "azi, maine, weekend (weekendul acesta), saptamana_aceasta, saptamana_viitoare, urmatoarele_14_zile"
+            },
+            "from": {
+              "type": "string",
+              "description": "Opțional, doar pentru o zi/perioadă anume: data de început YYYY-MM-DD"
+            },
+            "to": {
+              "type": "string",
+              "description": "Opțional: data de sfârșit YYYY-MM-DD, inclusiv"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_shift_colleagues",
+        "description": "Colegii dintr-o tură (doar ture în care e utilizatorul sau echipa lui).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "shift_id": {
+              "type": "string",
+              "description": "ID-ul turei, din get_my_shifts"
+            }
+          },
+          "required": [
+            "shift_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_my_profile",
+        "description": "Profilul utilizatorului: departament, echipă, nivel, skill-uri și certificări cu expirare.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_my_career_gap",
+        "description": "Ce îi lipsește utilizatorului pentru nivelul următor (sau un nivel țintă).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target_level": {
+              "type": "string",
+              "description": "Opțional: Agent II, Senior, Team Lead sau Supervizor"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_my_requests",
+        "description": "Cererile trimise de utilizator și statusul lor.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "create_request",
+        "description": "Pregătește o cerere către administrator. Cererea NU se trimite până când utilizatorul nu apasă Confirmă în interfață.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "SHIFT_SWAP",
+                "LEAVE",
+                "CAREER_INFO",
+                "OTHER"
+              ],
+              "description": "Tipul cererii"
+            },
+            "details": {
+              "type": "string",
+              "description": "Detaliile cererii, în română, așa cum le-a spus utilizatorul (date, motiv, curs etc.)"
+            },
+            "summary": {
+              "type": "string",
+              "description": "Rezumat scurt într-o propoziție"
+            }
+          },
+          "required": [
+            "type",
+            "details",
+            "summary"
+          ]
+        }
+      }
+    }
+  ],
+  "ADMIN_SIM": [
+    {
+      "type": "function",
+      "function": {
+        "name": "find_improvements",
+        "description": "PRIMUL PAS pentru sugestii: optimizatorul încearcă sute de mutări mici pe scenariu și întoarce cele mai bune (C1, C2…), fiecare cu impactul calculat (scor, acoperire, încălcări). Poți exclude angajați sau limita la un departament.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "department_code": {
+              "type": "string",
+              "description": "Opțional: doar un departament (SEC, RMP, CHK, BAG, PRM, GTE, OCC, MNT, ATC, MET, APR)"
+            },
+            "exclude_employee_names": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Opțional: nume (sau părți de nume) de angajați care NU trebuie mutați"
+            },
+            "limit": {
+              "type": "number",
+              "description": "Câte variante (implicit 8, maxim 10)"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_scenario_summary",
+        "description": "Rezumatul scenariului curent: perioadă, departamente și echipe (cu ID-uri și orele turelor), indicatori, cele mai mari goluri de acoperire.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "evaluate_scenario",
+        "description": "Indicatorii detaliați ai scenariului curent: acoperire pe departament, încălcări de reguli, posturi fără skill, certificări care expiră.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_shifts",
+        "description": "Turele din scenariu pentru un departament (opțional o zi), cu ID-uri, oameni asignați și necesar.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "department_code": {
+              "type": "string",
+              "description": "Codul departamentului (ex. SEC, RMP, CHK)"
+            },
+            "date": {
+              "type": "string",
+              "description": "Ziua YYYY-MM-DD (opțional)"
+            }
+          },
+          "required": [
+            "department_code"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_employees",
+        "description": "Angajații unui departament cu ID, echipă, nivel.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "department_code": {
+              "type": "string",
+              "description": "Codul departamentului"
+            }
+          },
+          "required": [
+            "department_code"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_employee_skill_gap",
+        "description": "Ce skill-uri îi lipsesc unui angajat pentru nivelul următor sau pentru mutarea în alt departament. Poți da direct numele angajatului.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "employee_name": {
+              "type": "string",
+              "description": "Numele angajatului, ex. „Bogdan Popescu” (sau doar numele de familie)"
+            },
+            "employee_id": {
+              "type": "string",
+              "description": "Opțional: ID-ul angajatului, dacă îl ai din list_employees"
+            },
+            "target_department_code": {
+              "type": "string",
+              "description": "Opțional: codul departamentului țintă"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_team_readiness",
+        "description": "Semaforul echipei: pe cine te poți baza în următoarele 30/60/90 de zile (verde/portocaliu/roșu, cu motive: demisii, final de contract, concedii, certificări care expiră) și echilibrul fiecărui departament (oameni disponibili față de necesar, competențe critice). Nu depinde de scenariu.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "department_code": {
+              "type": "string",
+              "description": "Opțional: un departament (ex. SEC, ATC, MET, APR)"
+            },
+            "horizon_days": {
+              "type": "number",
+              "description": "Orizontul: 30, 60 sau 90 de zile (implicit 30)"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "propose_replacements",
+        "description": "Propuneri de soluții când cineva nu mai e disponibil (demisie, final de contract, concediu lung, certificare expirată): mutare internă (eventual în lanț), prelungire + pregătirea unui coleg, candidat extern din baza de talente. Fiecare variantă are pași, avertismente, zile de pregătire și dacă e fezabilă.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "employee_name": {
+              "type": "string",
+              "description": "Numele persoanei care pleacă / lipsește, ex. „Cătălin Stan”"
+            },
+            "horizon_days": {
+              "type": "number",
+              "description": "Orizontul: 30, 60 sau 90 (implicit 30)"
+            },
+            "extension_days": {
+              "type": "number",
+              "description": "Câte zile i se propune să mai rămână (implicit 30)"
+            }
+          },
+          "required": [
+            "employee_name"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "preview_change",
+        "description": "Rulează motorul de simulare pe o copie temporară și returnează impactul. Nu salvează nimic.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "changes": {
+              "type": "array",
+              "description": "Listă de modificări. Tipuri: MOVE_EMPLOYEE_TEAM{employeeId,teamId}; SWAP_TEAMS{teamAId,teamBId}; ADD_ASSIGNMENT{shiftId,employeeId,positionId?}; REMOVE_ASSIGNMENT{assignmentId}; MOVE_ASSIGNMENT{assignmentId,toShiftId}; CHANGE_SHIFT_HOURS{departmentId,teamId?,fromStart?(HH:mm),shiftId?,startTime(HH:mm),endTime(HH:mm)}; SET_EMPLOYEE_LEVEL{employeeId,levelId}. Folosește exact ID-urile primite de la unelte.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            }
+          },
+          "required": [
+            "changes"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "propose_changes",
+        "description": "Salvează o sugestie pe care adminul o poate aplica cu un click. Nu aplică nimic. Cel mai simplu: dă candidate_ids din find_improvements (ex. [\"C1\",\"C3\"]); poți combina mai multe într-o singură sugestie. Alternativ, dă changes explicit.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "candidate_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "ID-uri din ultimul find_improvements, ex. [\"C1\"]"
+            },
+            "changes": {
+              "type": "array",
+              "description": "Listă de modificări. Tipuri: MOVE_EMPLOYEE_TEAM{employeeId,teamId}; SWAP_TEAMS{teamAId,teamBId}; ADD_ASSIGNMENT{shiftId,employeeId,positionId?}; REMOVE_ASSIGNMENT{assignmentId}; MOVE_ASSIGNMENT{assignmentId,toShiftId}; CHANGE_SHIFT_HOURS{departmentId,teamId?,fromStart?(HH:mm),shiftId?,startTime(HH:mm),endTime(HH:mm)}; SET_EMPLOYEE_LEVEL{employeeId,levelId}. Folosește exact ID-urile primite de la unelte.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Justificare scurtă în română: ce rezolvă și de ce"
+            }
+          },
+          "required": [
+            "rationale"
+          ]
+        }
+      }
+    }
+  ]
+}

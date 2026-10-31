@@ -17,7 +17,9 @@
     "db:reset": "prisma migrate reset --force",
     "typecheck": "tsc --noEmit",
     "postinstall": "prisma generate",
-    "mock:ollama": "node scripts/mock-ollama.mjs"
+    "mock:ollama": "node scripts/mock-ollama.mjs",
+    "ai:generate": "tsx scripts/ai-data/generate.ts",
+    "ai:eval": "tsx scripts/ai-data/eval.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.1",

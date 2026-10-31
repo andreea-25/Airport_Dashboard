@@ -123,6 +123,15 @@ Dacă Ollama rulează pe alt calculator din rețea, pune adresa lui în `OLLAMA_
 Fără Ollama aplicația funcționează normal: chatul angajatului spune că asistentul nu e disponibil,
 iar „Cere sugestii AI” din simulare salvează în locul lor cele mai bune variante ale optimizatorului (marcate „Optimizator”).
 
+### Antrenarea și evaluarea AI-ului
+
+Ghid complet, pas cu pas: **[docs/AI-TRAINING.md](docs/AI-TRAINING.md)**. Pe scurt (cu baza de date pornită):
+
+```bash
+npm run ai:generate   # date de antrenare + set de test, generate din baza de date (fără Ollama)
+npm run ai:eval       # notează modelul din .env pe setul de test → raport în data/ai/reports/
+```
+
 ## Varianta B: cu Docker în loc de PostgreSQL încorporat
 
 ```bash
@@ -189,6 +198,21 @@ asignare/scoatere, post, lider, copiere săptămână), inbox cereri cu filtre, 
 - *Ce-ar fi dacă*: concediu medical (N oameni într-o zi), creștere de trafic (+X% necesar într-un interval), expirarea unei certificări, **reguli configurabile** pe scenariu (repaus, maxim/normă săptămânală, nivel minim lider).
 - *Echitate*: nopți, weekenduri și ore pe om și pe departament.
 - **Aplică în programul real** (cu confirmare prin numele scenariului, notificări pentru angajații afectați și jurnal).
+
+**Echipa** (`/admin/team`, doar admin): semafor pentru fiecare angajat pe 30/60/90 de zile — *verde* (fără impedimente),
+*portocaliu* (concediu/curs în perioadă, certificare de reînnoit, plecare imediat după), *roșu* (pleacă în perioadă: demisie
+sau final de contract, lipsește cel puțin jumătate din perioadă, certificare obligatorie expirată / expiră în 14 zile).
+Adminul poate schimba manual culoarea, cu motiv obligatoriu. Fără date medicale și fără „ghicit” riscuri: doar ce introduce adminul
+(indisponibilități în fișa angajatului, data de final de contract, cereri de concediu aprobate).
+- Echilibrul pe departamente: oameni disponibili față de necesar (din profilul de acoperire), competențe critice, echipe fără șef de tură.
+- **Propune soluții** pentru cine e pe roșu/portocaliu: mutare internă (și în lanț, cu înlocuitor pentru cel mutat), prelungire
+  30 de zile + pregătirea unui coleg (cu calculul zilelor de pregătire), candidat extern; fiecare variantă poate fi
+  **testată în simulare** (se creează un scenariu cu modificările).
+- **Ce-ar fi dacă…**: simulezi o demisie / un concediu lung fără să salvezi nimic.
+- **Candidați** (`/admin/candidates`): baza de talente (studenți de la facultăți de specialitate, prezentări, concursuri),
+  cu acord GDPR, competențe, status (nou → contactat → interviu → ofertă), „Unde s-ar potrivi” și **Angajează**.
+- Cod: `src/lib/team/readiness.ts` (semafor + echilibru), `src/lib/team/replacement.ts` (propuneri), `src/app/actions/team.ts`.
+- AI (în chatul din simulare): `get_team_readiness`, `propose_replacements` (acceptă și ipoteze: `what_if: "demisie"`).
 
 Scorul: acoperire 45% + încălcări 25% + ore suplimentare 15% + certificări 15% (`src/lib/sim/evaluate.ts`, `computeScore`).
 

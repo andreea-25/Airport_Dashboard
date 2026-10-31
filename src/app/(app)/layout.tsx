@@ -29,6 +29,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       title: ro.nav.adminSection,
       items: [
         { href: "/admin/today", label: ro.nav.today },
+        { href: "/admin/team", label: ro.nav.team },
+        { href: "/admin/candidates", label: ro.nav.candidates },
         { href: "/admin/simulation", label: ro.nav.simulation },
         { href: "/admin/requests", label: ro.nav.requestsInbox, badge: newRequests },
         { href: "/admin/shifts", label: ro.nav.shifts },

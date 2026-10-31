@@ -1,6 +1,6 @@
 import { prisma } from "../db";
 import type { Session } from "../auth";
-import { addDaysStr, fmt, localDateStr, localHour, localTimeStr, localToUtc } from "../time";
+import { addDaysStr, fmt, localDateStr, localHour, localTimeStr, localToUtc, periodRange, SHIFT_PERIODS, type ShiftPeriod } from "../time";
 import { getMyCareerGap, getMyProfile, getMyRequests, getMyShifts, getShiftDetail } from "../services/employee";
 import { evaluate } from "../sim/evaluate";
 import { loadScenarioData, previewChanges, skillGap } from "../sim/scenario";
@@ -8,6 +8,8 @@ import { findImprovements, type Candidate } from "../sim/optimize";
 import { applyChangeToData, cloneData } from "../sim/changes";
 import { changeSchema } from "../sim/schema";
 import type { ToolDef } from "./ollama";
+import { computeAll, loadTeamData, roDate } from "../team/readiness";
+import { proposeReplacements } from "../team/replacement";
 
 /**
  * Tool context comes from the server session — never from what the user types in the chat.
@@ -29,6 +31,7 @@ const fn = (name: string, description: string, properties: Record<string, unknow
 const str = (description: string) => ({ type: "string", description });
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const norm = (x: string) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 const shiftOut = (s: { id: string; startAt: Date; endAt: Date; department: { name: string }; team: { name: string } | null }) => ({
   shift_id: s.id,
   zi: fmt(s.startAt, "EEEE dd.MM.yyyy"),
@@ -42,10 +45,15 @@ const shiftOut = (s: { id: string; startAt: Date; endAt: Date; department: { nam
 // ============================================================================
 
 export const employeeTools: ToolDef[] = [
-  fn("get_my_shifts", "Turele utilizatorului curent într-un interval. Implicit: următoarele 14 zile.", {
-    from: str("Data de început YYYY-MM-DD (opțional)"),
-    to: str("Data de sfârșit YYYY-MM-DD, inclusiv (opțional)"),
-  }),
+  fn(
+    "get_my_shifts",
+    "Turele utilizatorului curent (DOAR ale lui). Pentru perioade obișnuite folosește `period` — datele le calculează sistemul. Pentru o zi anume folosește from/to.",
+    {
+      period: { type: "string", enum: [...SHIFT_PERIODS], description: "azi, maine, weekend (weekendul acesta), saptamana_aceasta, saptamana_viitoare, urmatoarele_14_zile" },
+      from: str("Opțional, doar pentru o zi/perioadă anume: data de început YYYY-MM-DD"),
+      to: str("Opțional: data de sfârșit YYYY-MM-DD, inclusiv"),
+    },
+  ),
   fn("get_shift_colleagues", "Colegii dintr-o tură (doar ture în care e utilizatorul sau echipa lui).", { shift_id: str("ID-ul turei, din get_my_shifts") }, ["shift_id"]),
   fn("get_my_profile", "Profilul utilizatorului: departament, echipă, nivel, skill-uri și certificări cu expirare."),
   fn("get_my_career_gap", "Ce îi lipsește utilizatorului pentru nivelul următor (sau un nivel țintă).", {
@@ -67,10 +75,24 @@ export const employeeTools: ToolDef[] = [
 const employeeExec: Record<string, Exec> = {
   async get_my_shifts(args, { session }) {
     const today = localDateStr(new Date());
-    const from = typeof args.from === "string" && DATE.test(args.from) ? args.from : today;
-    const to = typeof args.to === "string" && DATE.test(args.to) ? args.to : addDaysStr(from, 13);
+    let from: string;
+    let to: string;
+    let label: string | null = null;
+    if (typeof args.period === "string" && (SHIFT_PERIODS as readonly string[]).includes(args.period)) {
+      ({ from, to, label } = periodRange(args.period as ShiftPeriod, today));
+    } else {
+      from = typeof args.from === "string" && DATE.test(args.from) ? args.from : today;
+      to = typeof args.to === "string" && DATE.test(args.to) ? args.to : addDaysStr(from, 13);
+    }
     const shifts = await getMyShifts(session, localToUtc(from, "00:00"), localToUtc(addDaysStr(to, 1), "00:00"));
-    return { result: { interval: `${from} – ${to}`, ture: shifts.map((s) => ({ ...shiftOut(s), post: s.assignments.find((a) => a.employeeId === session.employeeId)?.position?.name ?? null })) } };
+    return {
+      result: {
+        perioada: label
+          ? `${label}: ${fmt(localToUtc(from, "12:00"), "EEEE dd.MM")}${to !== from ? ` – ${fmt(localToUtc(to, "12:00"), "EEEE dd.MM")}` : ""}`
+          : `${from} – ${to}`,
+        ture: shifts.map((s) => ({ ...shiftOut(s), post: s.assignments.find((a) => a.employeeId === session.employeeId)?.position?.name ?? null })),
+      },
+    };
   },
   async get_shift_colleagues(args, { session }) {
     const d = await getShiftDetail(session, String(args.shift_id ?? ""));
@@ -139,7 +161,7 @@ export const adminTools: ToolDef[] = [
     "find_improvements",
     "PRIMUL PAS pentru sugestii: optimizatorul încearcă sute de mutări mici pe scenariu și întoarce cele mai bune (C1, C2…), fiecare cu impactul calculat (scor, acoperire, încălcări). Poți exclude angajați sau limita la un departament.",
     {
-      department_code: str("Opțional: doar un departament (SEC, RMP, CHK, BAG, PRM, GTE, OCC, MNT)"),
+      department_code: str("Opțional: doar un departament (SEC, RMP, CHK, BAG, PRM, GTE, OCC, MNT, ATC, MET, APR)"),
       exclude_employee_names: { type: "array", items: { type: "string" }, description: "Opțional: nume (sau părți de nume) de angajați care NU trebuie mutați" },
       limit: { type: "number", description: "Câte variante (implicit 8, maxim 10)" },
     },
@@ -151,10 +173,32 @@ export const adminTools: ToolDef[] = [
     date: str("Ziua YYYY-MM-DD (opțional)"),
   }, ["department_code"]),
   fn("list_employees", "Angajații unui departament cu ID, echipă, nivel.", { department_code: str("Codul departamentului") }, ["department_code"]),
-  fn("get_employee_skill_gap", "Ce skill-uri îi lipsesc unui angajat pentru nivelul următor sau pentru mutarea în alt departament.", {
-    employee_id: str("ID angajat"),
+  fn("get_employee_skill_gap", "Ce skill-uri îi lipsesc unui angajat pentru nivelul următor sau pentru mutarea în alt departament. Poți da direct numele angajatului.", {
+    employee_name: str("Numele angajatului, ex. „Bogdan Popescu” (sau doar numele de familie)"),
+    employee_id: str("Opțional: ID-ul angajatului, dacă îl ai din list_employees"),
     target_department_code: str("Opțional: codul departamentului țintă"),
-  }, ["employee_id"]),
+  }),
+  fn(
+    "get_team_readiness",
+    "Semaforul echipei: pe cine te poți baza în următoarele 30/60/90 de zile (verde/portocaliu/roșu, cu motive: demisii, final de contract, concedii, certificări care expiră) și echilibrul fiecărui departament (oameni disponibili față de necesar, competențe critice). Nu depinde de scenariu.",
+    {
+      department_code: str("Opțional: un departament (ex. SEC, ATC, MET, APR)"),
+      horizon_days: { type: "number", description: "Orizontul: 30, 60 sau 90 de zile (implicit 30)" },
+    },
+  ),
+  fn(
+    "propose_replacements",
+    "Propuneri de soluții când cineva nu mai e disponibil (demisie, final de contract, concediu lung, certificare expirată): mutare internă (eventual în lanț), prelungire + pregătirea unui coleg, candidat extern din baza de talente. Fiecare variantă are pași, avertismente, zile de pregătire și dacă e fezabilă.",
+    {
+      employee_name: str("Numele persoanei care pleacă / lipsește, ex. „Cătălin Stan”"),
+      horizon_days: { type: "number", description: "Orizontul: 30, 60 sau 90 (implicit 30)" },
+      extension_days: { type: "number", description: "Câte zile i se propune să mai rămână (implicit 30)" },
+      what_if: { type: "string", enum: ["demisie", "concediu_lung", "detasare"], description: "Doar pentru o IPOTEZĂ spusă de admin („dacă demisionează X”, „X intră în concediu lung”); nu salvează nimic" },
+      from_date: str("Opțional, pentru ipoteză: prima zi de absență YYYY-MM-DD (implicit peste 30 de zile la demisie, azi la concediu)"),
+      to_date: str("Opțional, pentru concediu/detașare: ultima zi YYYY-MM-DD"),
+    },
+    ["employee_name"],
+  ),
   fn("preview_change", "Rulează motorul de simulare pe o copie temporară și returnează impactul. Nu salvează nimic.", { changes: changeItems }, ["changes"]),
   fn("propose_changes", "Salvează o sugestie pe care adminul o poate aplica cu un click. Nu aplică nimic. Cel mai simplu: dă candidate_ids din find_improvements (ex. [\"C1\",\"C3\"]); poți combina mai multe într-o singură sugestie. Alternativ, dă changes explicit.", {
     candidate_ids: { type: "array", items: { type: "string" }, description: "ID-uri din ultimul find_improvements, ex. [\"C1\"]" },
@@ -165,7 +209,7 @@ export const adminTools: ToolDef[] = [
 
 async function deptByCode(code: unknown) {
   const d = await prisma.department.findFirst({ where: { code: String(code ?? "").toUpperCase() } });
-  if (!d) throw new Error(`Departament necunoscut: ${code}. Coduri valide: CHK, SEC, RMP, BAG, PRM, GTE, OCC, MNT`);
+  if (!d) throw new Error(`Departament necunoscut: ${code}. Coduri valide: CHK, SEC, RMP, BAG, PRM, GTE, OCC, MNT, ATC, MET, APR`);
   return d;
 }
 
@@ -202,7 +246,92 @@ async function lastCandidates(conversationId: string): Promise<Candidate[]> {
   return ((msg?.toolCalls as { meta?: { candidates?: Candidate[] } } | null)?.meta?.candidates ?? []) as Candidate[];
 }
 
+function requireAdmin(ctx: ToolContext) {
+  if (ctx.session.role !== "ADMIN") throw new Error("Acces interzis");
+}
+const horizonOf = (v: unknown) => ([30, 60, 90].includes(Number(v)) ? Number(v) : Number(v) > 60 ? 90 : Number(v) > 30 ? 60 : 30);
+const COLOR_RO = { GREEN: "verde", ORANGE: "portocaliu", RED: "roșu" } as const;
+
 const adminExec: Record<string, Exec> = {
+  async get_team_readiness(args, ctx) {
+    requireAdmin(ctx);
+    const horizon = horizonOf(args.horizon_days);
+    const data = await loadTeamData();
+    const { readiness, balance } = computeAll(data, horizon);
+    const code = args.department_code ? String(args.department_code).toUpperCase() : null;
+    const depts = balance.filter((b) => !code || b.code === code);
+    if (code && !depts.length) throw new Error(`Departament necunoscut: ${code}`);
+    const ids = new Set(data.departments.filter((d) => depts.some((b) => b.id === d.id)).map((d) => d.id));
+    const people = data.employees
+      .filter((e) => ids.has(e.departmentId) && readiness.get(e.id)!.color !== "GREEN")
+      .map((e) => {
+        const r = readiness.get(e.id)!;
+        return { nume: e.name, culoare: COLOR_RO[r.color], nivel: e.levelName, departament: data.departments.find((d) => d.id === e.departmentId)!.code, motive: r.reasons.map((x) => x.text) };
+      })
+      .sort((a, b) => (a.culoare === "roșu" ? -1 : 0) - (b.culoare === "roșu" ? -1 : 0));
+    return {
+      result: {
+        orizont_zile: horizon,
+        departamente: depts.map((b) => ({
+          cod: b.code,
+          nume: b.name,
+          stare: COLOR_RO[b.status],
+          verde: b.counts.GREEN,
+          portocaliu: b.counts.ORANGE,
+          rosu: b.counts.RED,
+          necesar: b.required,
+          marja: b.margin,
+          competente_critice: b.critical.map((c) => `${c.name}: ${c.greenHolders} pe verde din ${c.needed} necesari`),
+          echipe_fara_sef_de_tura: b.teams.filter((t) => !t.hasLead).map((t) => t.name),
+        })),
+        oameni_de_urmarit: people.slice(0, code ? 30 : 15),
+        ...(people.length > (code ? 30 : 15) ? { nota: `Încă ${people.length - (code ? 30 : 15)} persoane; cere un departament anume pentru lista completă.` } : {}),
+      },
+    };
+  },
+  async propose_replacements(args, ctx) {
+    requireAdmin(ctx);
+    const name = norm(String(args.employee_name ?? "")).trim();
+    if (!name) throw new Error("Dă employee_name");
+    const data = await loadTeamData();
+    const matches = data.employees.filter((e) => {
+      const full = norm(e.name);
+      return full === name || name.split(/\s+/).every((p) => full.split(" ").includes(p));
+    });
+    if (!matches.length) throw new Error(`Nu există niciun angajat activ cu numele „${args.employee_name}”`);
+    if (matches.length > 1) return { result: { ambiguu: true, mesaj: "Mai mulți angajați au acest nume. Întreabă adminul la care se referă.", variante: matches.map((m) => m.name) } };
+    const horizon = horizonOf(args.horizon_days);
+    const ext = Math.max(0, Math.min(180, Number(args.extension_days) || 30));
+    const WHAT: Record<string, string> = { demisie: "RESIGNATION", concediu_lung: "LEAVE", detasare: "SECONDMENT" };
+    const type = WHAT[String(args.what_if ?? "")];
+    const today = localDateStr(new Date());
+    const from = DATE.test(String(args.from_date ?? "")) ? String(args.from_date) : addDaysStr(today, type === "RESIGNATION" ? 30 : 0);
+    const whatIf = type ? { type, start: from, end: DATE.test(String(args.to_date ?? "")) ? String(args.to_date) : null } : null;
+    const res = proposeReplacements(data, matches[0].id, { horizon, extensionDays: ext, whatIf })!;
+    return {
+      result: {
+        angajat: `${res.employee.name} (${res.employee.level}, ${res.employee.department}${res.employee.team ? `, ${res.employee.team}` : ""})`,
+        post: res.employee.position,
+        culoare: COLOR_RO[res.readiness.color],
+        motive: res.readiness.reasons.map((x) => x.text),
+        lipseste_din: roDate(res.gapFrom),
+        definitiv: res.permanent,
+        marja_departament: res.departmentMargin,
+        variante: res.options.slice(0, 5).map((o, i) => ({
+          nr: i + 1,
+          tip: { RENEW: "reînnoire", MOVE: "mutare internă", EXTEND: "prelungire + pregătire", CANDIDATE: "candidat extern" }[o.kind],
+          titlu: o.title,
+          fezabil: o.feasible,
+          scor: o.score,
+          pasi: o.steps,
+          avertismente: o.warnings,
+          zile_pregatire: o.trainingDays,
+        })),
+        ...(whatIf ? { ipoteza: `${args.what_if} din ${roDate(whatIf.start)} (nesalvată)` } : {}),
+        link: `/admin/team/${res.employee.id}?h=${horizon}${whatIf ? `&what=${whatIf.type}&from=${whatIf.start}${whatIf.end ? `&to=${whatIf.end}` : ""}` : ""}`,
+      },
+    };
+  },
   async find_improvements(args, ctx) {
     const id = requireScenario(ctx);
     const data = await loadScenarioData(id);
@@ -317,8 +446,24 @@ const adminExec: Record<string, Exec> = {
   async get_employee_skill_gap(args, ctx) {
     const id = requireScenario(ctx);
     const target = args.target_department_code ? { targetDepartmentId: (await deptByCode(args.target_department_code)).id } : {};
-    const ov = await prisma.scenarioEmployeeOverride.findUnique({ where: { scenarioId_employeeId: { scenarioId: id, employeeId: String(args.employee_id) } } });
-    const g = await skillGap(String(args.employee_id), target, ov ?? undefined);
+    // accept an id or a name (models often put the name in employee_id)
+    let employeeId = typeof args.employee_id === "string" ? args.employee_id : "";
+    if (!employeeId || !(await prisma.employee.findUnique({ where: { id: employeeId }, select: { id: true } }))) {
+      const name = norm(String(args.employee_name ?? args.employee_id ?? "")).trim();
+      if (!name) throw new Error("Dă employee_name (numele angajatului)");
+      const all = await prisma.employee.findMany({ where: { active: true }, select: { id: true, firstName: true, lastName: true } });
+      const matches = all.filter((e) => {
+        const full = norm(`${e.firstName} ${e.lastName}`);
+        return full === name || name.split(/\s+/).every((part) => full.split(" ").includes(part));
+      });
+      if (!matches.length) throw new Error(`Nu există niciun angajat activ cu numele „${args.employee_name ?? args.employee_id}”`);
+      if (matches.length > 1) {
+        return { result: { ambiguu: true, mesaj: "Mai mulți angajați au acest nume. Întreabă adminul la care se referă.", variante: matches.map((m) => `${m.firstName} ${m.lastName}`) } };
+      }
+      employeeId = matches[0].id;
+    }
+    const ov = await prisma.scenarioEmployeeOverride.findUnique({ where: { scenarioId_employeeId: { scenarioId: id, employeeId } } });
+    const g = await skillGap(employeeId, target, ov ?? undefined);
     return { result: { angajat: g.employeeName, tinta: g.targetLevel ?? g.targetDepartment, pregatit: g.ready, lipsesc: g.items.filter((i) => !i.ok).map((i) => `${i.skillName} (${i.current}/${i.required}${i.expired ? ", expirat" : ""})`), vechime_ok: g.monthsOk } };
   },
   async preview_change(args, ctx) {

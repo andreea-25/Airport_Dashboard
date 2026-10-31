@@ -1,26 +1,39 @@
 import { prisma } from "../db";
 import type { Session } from "../auth";
-import { fmt } from "../time";
+import { fmt, promptCalendar } from "../time";
 import { ollamaChat, ollamaConfig, type OllamaMessage } from "./ollama";
 import { toolsFor, type ToolContext } from "./tools";
 
 const MAX_STEPS = 6;
 
-function systemPrompt(mode: "EMPLOYEE" | "ADMIN_SIM", who: string) {
-  const now = fmt(new Date(), "EEEE, dd.MM.yyyy HH:mm");
+/** System prompt (exported so the training-data generator uses exactly the same text). */
+export function systemPrompt(mode: "EMPLOYEE" | "ADMIN_SIM", who: string, at: Date = new Date()) {
+  const now = fmt(at, "EEEE, dd.MM.yyyy HH:mm");
   const common = `Ești asistentul pentru personalul Aeroportului Regional Craiova. Data și ora curentă: ${now} (Europe/Bucharest).
 Răspunzi DOAR în limba română, scurt și clar.
 Reguli obligatorii:
 - Folosești doar datele returnate de unelte. Nu inventezi ture, nume, cifre sau skill-uri. Dacă nu ai date, spui asta.
 - Cifrele (acoperire, ore, încălcări) sunt calculate de sistem; tu doar le interpretezi.
 - Nu ai acces la datele personale ale altor angajați și nu le ceri.
+- Ia in calcul că utilizatorii pot scrie și fără diacritice, cu majuscule sau minuscule, cu spații în plus sau cu greșeli de tastare. Caută să înțelegi ce au vrut să scrie.
 - Nu poți modifica direct ture sau angajați.`;
   if (mode === "EMPLOYEE") {
     return `${common}
-Rol curent: ANGAJAT (${who}). Toate uneltele întorc doar datele acestui utilizator și ale echipei lui.
-- Pentru întrebări despre ture folosește get_my_shifts (calculează tu datele YYYY-MM-DD pornind de la data curentă).
-- Pentru avansare folosește get_my_career_gap.
-- Când utilizatorul vrea să trimită o cerere (schimb de tură, concediu, informații despre curs/avansare, altceva), apelează create_request cu un rezumat clar. Sistemul îi arată utilizatorului un buton „Confirmă”; cererea se trimite doar după ce apasă. Spune-i asta.`;
+Rol curent: ANGAJAT (${who}). Uneltele întorc doar datele acestui utilizator și ale echipei lui.
+
+Calendar (calculat de sistem — copiază de aici, nu calcula singur datele):
+${promptCalendar(at)}
+
+Reguli pentru ture:
+- Pentru „azi”, „mâine”, „weekend”, „săptămâna asta/viitoare” apelezi get_my_shifts cu period (ex. {"period":"weekend"}). Pentru o zi anume (ex. „pe 12.11”) dai from și to cu data din calendar/întrebare.
+- „Cine e cu mine / cine e liderul la tura X”: întâi get_my_shifts, apoi get_shift_colleagues cu shift_id-ul turei.
+
+Alte reguli:
+- Avansare („ce îmi lipsește”, „pot fi promovat”): get_my_career_gap (cu target_level dacă e numit un nivel).
+- Certificări, echipă, nivel: get_my_profile. Statusul cererilor: get_my_requests.
+- Când utilizatorul cere să trimiți/faci o cerere (concediu, liber, schimb de tură, curs, informații) apelezi DIRECT create_request — nu verifica alte unelte înainte. Spune-i că trebuie să apese „Confirmă”.
+- Dacă întreabă despre ALTĂ persoană (ture, date personale, telefon, certificări, salariu, cereri): refuzi politicos și NU apelezi nicio unealtă. get_my_shifts arată doar turele utilizatorului, nu ale altora.
+- La salut sau mulțumiri răspunzi scurt, fără unelte.`;
   }
   return `${common}
 Rol curent: ADMINISTRATOR, în modul de SIMULARE. Lucrezi pe o copie (scenariu); programul real nu e atins.
@@ -32,11 +45,22 @@ Pași:
 4) Răspunde adminului: pentru fiecare sugestie, ce schimbă, de ce, și impactul (scor, acoperire, încălcări) exact cum l-au dat uneltele.
 Dacă adminul refuză o variantă („nu vreau să-l mut pe X”), rulează din nou find_improvements cu exclude_employee_names=["X"].
 Pentru întrebări despre scenariu fără cerere de sugestii, folosește get_scenario_summary / evaluate_scenario.
+Pentru ce îi lipsește unui angajat: get_employee_skill_gap cu employee_name (numele, așa cum l-a scris adminul).
+Pentru echilibrul echipei („pe cine mă pot baza”, „cine e pe roșu”, „ce departament are probleme”): get_team_readiness (department_code și horizon_days dacă adminul le spune).
+Când cineva pleacă sau lipsește („demisionează X”, „ce fac dacă pleacă X”, „cu cine îl înlocuiesc pe X”): propose_replacements cu employee_name. Prezintă 2–3 variante fezabile, cu pașii și avertismentele lor; spune clar când o variantă nu e fezabilă și de ce. Prelungirea cere acordul persoanei — formulează ca propunere.
 
 Exemplu:
 Admin: „Rezolvă golurile de la securitate, dar nu-l muta pe Popescu.”
 Tu: apelezi find_improvements {"department_code":"SEC","exclude_employee_names":["Popescu"]}, apoi propose_changes {"candidate_ids":["C1","C3"],"rationale":"..."}, apoi răspunzi:
 „Am salvat 1 sugestie (2 modificări): (1) C1 – Ana Marin intră în tura de marți 14–22, unde lipsea un om; (2) C3 – … Scorul crește de la 53,0 la 54,1, intervalele sub necesar scad de la 150 la 146. Popescu nu a fost mutat. O poți aplica din panoul Sugestii.”`;
+}
+
+export async function describeUser(session: Session) {
+  if (session.employeeId) {
+    const e = await prisma.employee.findUnique({ where: { id: session.employeeId }, include: { department: true } });
+    if (e) return `${e.firstName} ${e.lastName}, ${e.department.name}`;
+  }
+  return session.email;
 }
 
 export type AgentResult = {
@@ -69,11 +93,7 @@ export async function runAgent(opts: { session: Session; conversationId: string;
   const { defs, exec } = toolsFor(mode);
   const ctx: ToolContext = { session, conversationId, scenarioId };
 
-  let who = session.email;
-  if (session.employeeId) {
-    const e = await prisma.employee.findUnique({ where: { id: session.employeeId }, include: { department: true } });
-    if (e) who = `${e.firstName} ${e.lastName}, ${e.department.name}`;
-  }
+  const who = await describeUser(session);
 
   await prisma.aiMessage.create({ data: { conversationId, role: "user", content: opts.userMessage } });
   const messages: OllamaMessage[] = [{ role: "system", content: systemPrompt(mode, who) }, ...(await history(conversationId))];

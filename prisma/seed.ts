@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { prisma } from "../src/lib/db";
 import { addDaysStr, dateOnly, localToUtc, mondayOf, shiftInterval } from "../src/lib/time";
 import { createScenarioFromReal, applyChange } from "../src/lib/sim/scenario";
+import { seedTeam } from "./seed-team";
 
 // Deterministic pseudo-random generator so every seed run produces the same data.
 let rngState = 20261030;
@@ -42,7 +43,19 @@ const SKILLS = [
   { code: "FIRSTAID", name: "Prim ajutor", type: "CERTIFICATION", hasExpiry: true },
   { code: "ENG", name: "Limba engleză", type: "SKILL", hasExpiry: false }, // 1 = A2, 2 = B1, 3 = B2/C1
   { code: "TEAMCOORD", name: "Coordonare echipă", type: "SKILL", hasExpiry: false },
+  { code: "ATC_LIC", name: "Licență controlor de trafic aerian", type: "CERTIFICATION", hasExpiry: true },
+  { code: "ATC_TWR", name: "Calificare turn de control (TWR)", type: "SKILL", hasExpiry: false },
+  { code: "RADIO", name: "Radiotelefonie aeronautică", type: "CERTIFICATION", hasExpiry: true },
+  { code: "MET_OBS", name: "Autorizare observator meteo aeronautic", type: "CERTIFICATION", hasExpiry: true },
+  { code: "MET_FC", name: "Prognoză aeronautică (METAR/TAF)", type: "SKILL", hasExpiry: false },
+  { code: "APRON", name: "Control platformă și alocare standuri", type: "SKILL", hasExpiry: false },
 ] as const;
+
+/** Working days needed to obtain a skill (or one proficiency level of it). Long ones can't be covered by internal training in 30 days. */
+const TRAINING_DAYS: Record<string, number> = {
+  AVSEC: 10, XRAY: 15, ETD: 5, AIRSIDE: 5, PUSHBACK: 10, BELT: 3, GPU: 3, DGR: 5, DCS: 7, PRM: 5, DEICE: 7, FIRSTAID: 2,
+  ENG: 40, TEAMCOORD: 20, ATC_LIC: 240, ATC_TWR: 60, RADIO: 15, MET_OBS: 60, MET_FC: 40, APRON: 15,
+};
 
 type DeptDef = {
   code: string;
@@ -116,6 +129,30 @@ const DEPTS: DeptDef[] = [
     positions: [{ name: "Tehnician", skills: [["AIRSIDE", 1]] }, { name: "Degivrare", skills: [["AIRSIDE", 1], ["DEICE", 1]] }],
     staffing: [[0, 24, 1]],
   },
+  {
+    code: "ATC", name: "Turn de control (ATC)", teams: 3, teamSize: 3, slots: ["M", "A", "N"],
+    coreSkills: ["ATC_LIC", "ATC_TWR", "RADIO", "ENG"],
+    positions: [
+      { name: "Controlor turn", skills: [["ATC_LIC", 1], ["ATC_TWR", 2], ["RADIO", 1], ["ENG", 3]] },
+      { name: "Asistent turn", skills: [["RADIO", 1], ["ENG", 2]] },
+    ],
+    staffing: [[0, 6, 1], [6, 22, 2], [22, 24, 1]],
+  },
+  {
+    code: "MET", name: "Meteorologie aeronautică", teams: 3, teamSize: 2, slots: ["M", "A", "N"],
+    coreSkills: ["MET_OBS", "MET_FC", "ENG"],
+    positions: [
+      { name: "Observator meteo", skills: [["MET_OBS", 1]] },
+      { name: "Prognozist", skills: [["MET_OBS", 1], ["MET_FC", 2]] },
+    ],
+    staffing: [[0, 24, 1]],
+  },
+  {
+    code: "APR", name: "Coordonare platformă (Apron)", teams: 3, teamSize: 2, slots: ["M", "A", "N"],
+    coreSkills: ["APRON", "RADIO", "AIRSIDE"],
+    positions: [{ name: "Coordonator platformă", skills: [["APRON", 1], ["RADIO", 1], ["AIRSIDE", 1]] }],
+    staffing: [[0, 24, 1]],
+  },
 ];
 
 const TEMPLATES = {
@@ -152,6 +189,10 @@ function requirementsFor(dept: DeptDef, rank: number): { skills: [string, number
 }
 
 async function reset() {
+  await prisma.candidateSkill.deleteMany();
+  await prisma.candidate.deleteMany();
+  await prisma.readinessOverride.deleteMany();
+  await prisma.availabilityEvent.deleteMany();
   await prisma.aiMessage.deleteMany();
   await prisma.aiConversation.deleteMany();
   await prisma.scenarioSuggestion.deleteMany();
@@ -196,7 +237,7 @@ async function main() {
   const levels: Record<number, string> = {};
   for (const l of LEVELS) levels[l.rank] = (await prisma.level.create({ data: l })).id;
   const skillId: Record<string, string> = {};
-  for (const s of SKILLS) skillId[s.code] = (await prisma.skill.create({ data: { ...s } })).id;
+  for (const s of SKILLS) skillId[s.code] = (await prisma.skill.create({ data: { ...s, trainingDays: TRAINING_DAYS[s.code] ?? 10 } })).id;
 
   const templateId: Record<string, string> = {};
   for (const [k, t] of Object.entries(TEMPLATES)) {
@@ -300,6 +341,9 @@ async function main() {
         for (const [c, p] of current) have.set(c, p);
         for (const c of d.coreSkills) if (!have.has(c)) have.set(c, 1);
         if (!have.has("ENG")) have.set("ENG", 1);
+        // ICAO English is mandatory in the tower; meteorologists publish METAR/TAF in English
+        if (d.code === "ATC") have.set("ENG", 3);
+        if (d.code === "MET" || d.code === "APR") have.set("ENG", Math.max(have.get("ENG") ?? 1, 2));
         if (rank < 5) {
           for (const [c, p] of requirementsFor(d, rank + 1).skills) if (rand() < 0.45) have.set(c, Math.max(have.get(c) ?? 0, p));
         }
@@ -478,6 +522,9 @@ async function main() {
       createdByAI: true,
     },
   });
+
+  // ---------- Team readiness (availability events, contracts) + external candidates ----------
+  await seedTeam({ now, admin: admin.id, employeesByDept, skillId, rand });
 
   // ---------- Demo scenario: 12h shifts at ramp handling, next week ----------
   const nextMonday = addDaysStr(mondayOf(now), 7);

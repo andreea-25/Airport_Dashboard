@@ -88,3 +88,46 @@ export function localInfo(d: Date | number): LocalInfo {
   }
   return v;
 }
+
+// ---------------------------------------------------------------------------
+// Named periods ("weekend", "next week"…) computed by code, so the AI never does date arithmetic.
+// ---------------------------------------------------------------------------
+export const SHIFT_PERIODS = ["azi", "maine", "weekend", "saptamana_aceasta", "saptamana_viitoare", "urmatoarele_14_zile"] as const;
+export type ShiftPeriod = (typeof SHIFT_PERIODS)[number];
+
+export function periodRange(period: ShiftPeriod, today: string = localDateStr(new Date())): { from: string; to: string; label: string } {
+  const dow = localIsoDow(localToUtc(today, "12:00")); // 1 = Monday … 7 = Sunday
+  const d = (n: number) => addDaysStr(today, n);
+  switch (period) {
+    case "azi":
+      return { from: today, to: today, label: "azi" };
+    case "maine":
+      return { from: d(1), to: d(1), label: "mâine" };
+    case "weekend":
+      if (dow === 6) return { from: today, to: d(1), label: "weekendul acesta" };
+      if (dow === 7) return { from: today, to: today, label: "azi (duminică)" };
+      return { from: d(6 - dow), to: d(7 - dow), label: "weekendul acesta" };
+    case "saptamana_aceasta":
+      return { from: today, to: d(7 - dow), label: "săptămâna aceasta" };
+    case "saptamana_viitoare":
+      return { from: d(8 - dow), to: d(14 - dow), label: "săptămâna viitoare" };
+    case "urmatoarele_14_zile":
+    default:
+      return { from: today, to: d(13), label: "următoarele 14 zile" };
+  }
+}
+
+/** Ready-made calendar for the AI prompt (so it can copy dates instead of computing them). */
+export function promptCalendar(at: Date = new Date()): string {
+  const today = localDateStr(at);
+  const fmtR = (s: string) => `${s.slice(8)}.${s.slice(5, 7)}.${s.slice(0, 4)}`;
+  const rows = SHIFT_PERIODS.map((p) => {
+    const r = periodRange(p, today);
+    return `- ${p}: ${r.from === r.to ? fmtR(r.from) : `${fmtR(r.from)} – ${fmtR(r.to)}`} (from=${r.from}, to=${r.to})`;
+  });
+  const days = Array.from({ length: 14 }, (_, i) => {
+    const d = addDaysStr(today, i);
+    return `${fmt(localToUtc(d, "12:00"), "EEEE")} ${fmtR(d)} (${d})`;
+  });
+  return `${rows.join("\n")}\nUrmătoarele zile: ${days.join("; ")}`;
+}

@@ -37,6 +37,31 @@ enum SuggestionStatus {
   DISMISSED
 }
 
+enum AvailabilityType {
+  LEAVE
+  MATERNITY
+  SECONDMENT
+  TRAINING
+  RESIGNATION
+  CONTRACT_END
+  OTHER
+}
+
+enum Readiness {
+  GREEN
+  ORANGE
+  RED
+}
+
+enum CandidateStatus {
+  NEW
+  CONTACTED
+  INTERVIEW
+  OFFER
+  HIRED
+  REJECTED
+}
+
 enum AiMode {
   EMPLOYEE
   ADMIN_SIM
@@ -101,10 +126,84 @@ model Employee {
   hireDate    DateTime
   levelSince  DateTime
   active      Boolean           @default(true)
+  /// fixed-term contracts: last day of the contract
+  contractEndDate DateTime?     @db.Date
   user        User?
   skills      EmployeeSkill[]
   assignments ShiftAssignment[]
   requests    Request[]
+  availability AvailabilityEvent[]
+  readinessOverrides ReadinessOverride[]
+  hiredFrom   Candidate?        @relation("CandidateHired")
+}
+
+/// Periods when an employee will not work: leave, maternity, secondment, long training, resignation, end of contract.
+model AvailabilityEvent {
+  id          String           @id @default(cuid())
+  employeeId  String
+  employee    Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  type        AvailabilityType
+  /// first day the person is NOT available
+  startDate   DateTime         @db.Date
+  /// last day of absence (inclusive); null = leaves for good (resignation, end of contract)
+  endDate     DateTime?        @db.Date
+  /// when it was announced (e.g. resignation notice date)
+  announcedAt DateTime?        @db.Date
+  note        String?
+  createdById String?
+  createdAt   DateTime         @default(now())
+
+  @@index([employeeId])
+}
+
+/// Admin correction of the automatic traffic-light colour (always with a reason).
+model ReadinessOverride {
+  id          String    @id @default(cuid())
+  employeeId  String
+  employee    Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  color       Readiness
+  reason      String
+  validUntil  DateTime? @db.Date
+  setById     String?
+  createdAt   DateTime  @default(now())
+
+  @@index([employeeId])
+}
+
+/// External talent pool: students / graduates met at faculties, presentations, competitions (e.g. this hackathon).
+model Candidate {
+  id              String           @id @default(cuid())
+  firstName       String
+  lastName        String
+  email           String           @unique
+  phone           String?
+  university      String
+  specialization  String
+  studyYear       String
+  event           String
+  eventDate       DateTime?        @db.Date
+  /// department codes the candidate is interested in
+  interests       String[]
+  availableFrom   DateTime?        @db.Date
+  /// GDPR consent for keeping the data in the talent pool
+  consentAt       DateTime?
+  status          CandidateStatus  @default(NEW)
+  notes           String?
+  hiredEmployeeId String?          @unique
+  hiredEmployee   Employee?        @relation("CandidateHired", fields: [hiredEmployeeId], references: [id], onDelete: SetNull)
+  skills          CandidateSkill[]
+  createdAt       DateTime         @default(now())
+}
+
+model CandidateSkill {
+  candidateId String
+  skillId     String
+  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  skill       Skill     @relation(fields: [skillId], references: [id])
+  proficiency Int       @default(1)
+  expiresAt   DateTime?
+
+  @@id([candidateId, skillId])
 }
 
 model Skill {
@@ -113,7 +212,10 @@ model Skill {
   code        String             @unique
   type        SkillType
   hasExpiry   Boolean            @default(false)
+  /// working days needed to obtain this skill / certification (or one proficiency level of it)
+  trainingDays Int               @default(10)
   employees   EmployeeSkill[]
+  candidates  CandidateSkill[]
   requirements LevelRequirement[]
   positions   PositionSkill[]
 }
