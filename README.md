@@ -218,7 +218,8 @@ Scorul: acoperire 45% + încălcări 25% + ore suplimentare 15% + certificări 1
 
 **AI:** un serviciu, două moduri (`src/lib/ai`). Angajat: `get_my_shifts`, `get_shift_colleagues`, `get_my_profile`,
 `get_my_career_gap`, `get_my_requests`, `create_request`. Admin: `find_improvements` (rulează optimizatorul și dă variantele C1, C2…), `get_scenario_summary`, `evaluate_scenario`,
-`list_shifts`, `list_employees`, `get_employee_skill_gap`, `preview_change`, `propose_changes` (acceptă `candidate_ids`).
+`list_shifts`, `list_employees`, `get_employee_skill_gap`, `preview_change`, `propose_changes` (acceptă `candidate_ids`),
+`get_team_readiness` (semaforul și echilibrul pe departamente), `propose_replacements` (soluții când pleacă / lipsește cineva; acceptă ipoteze cu `what_if`).
 AI-ul e „analistul”: alege și combină variantele optimizatorului și explică în română; poate exclude oameni la cerere („nu-l muta pe X”).
 
 ## Reguli de siguranță (unde sunt aplicate)
@@ -229,16 +230,22 @@ AI-ul e „analistul”: alege și combină variantele optimizatorului și expli
 - AI-ul nu scrie în tabelele reale: `create_request` doar pregătește o ciornă; cererea se creează **numai** când angajatul apasă „Confirmă” (`/api/ai/confirm`). `propose_changes` salvează un `ScenarioSuggestion`; aplicarea trece prin motorul de simulare.
 - Cifrele sunt calculate de motorul determinist (`src/lib/sim/evaluate.ts`), nu de model.
 - Toate mesajele și apelurile de unelte sunt salvate în `AiMessage`; acțiunile de modificare scriu în `AuditLog`.
+- Semaforul (pagina Echipa), indisponibilitățile și candidații sunt vizibile **doar adminului**. Semaforul folosește numai date introduse de admin
+  (tipul absenței, fără diagnostic/date medicale); schimbarea manuală a culorii cere un motiv și rămâne în istoric.
+- Candidații se salvează doar cu acordul lor (GDPR, `consentAt`); pot fi șterși oricând din baza de talente.
+- „Testează în simulare” și „Ce-ar fi dacă…” nu modifică programul real; propunerile se recalculează pe server, nu se iau din browser.
 
 ## Structura
 
 ```
-prisma/schema.prisma, migrations/, seed.ts
+prisma/schema.prisma, migrations/, seed.ts, seed-team.ts (indisponibilități, contracte, candidați demo)
 src/lib/sim/        motorul de simulare: evaluate.ts (indicatori + scor), changes.ts, scenario.ts (create/apply/undo/preview/compare/skillGap),
                     optimize.ts (optimizatorul), calendar.ts, suggestions.ts
 src/lib/ai/         ollama.ts, tools.ts, agent.ts
+src/lib/team/       readiness.ts (semafor + echilibru pe departamente), replacement.ts (propuneri de soluții, potrivire candidați)
+src/components/team/ ReadinessPanel, WhatIfForm, ApplySolutionButton, CandidateForm/Skills/Status, HireForm
 src/lib/services/   acces la date filtrat pe sesiune (angajat)
-src/app/actions/    server actions (auth, admin, comments, requests, simulation)
+src/app/actions/    server actions (auth, admin, comments, requests, simulation, team)
 src/app/api/        ai/chat, ai/confirm, admin/sim/suggest, health
 src/app/(app)/      paginile (angajat + admin)
 scripts/mock-ollama.mjs
@@ -253,6 +260,13 @@ scripts/mock-ollama.mjs
 - Notificări doar în aplicație (fără email).
 - Limba engleză e un skill cu nivel 1 = A2, 2 = B1, 3 = B2/C1.
 - „Tură fără lider” = nicio persoană de nivel ≥ Senior în tură.
+- 11 departamente: cele 8 inițiale + Turn de control (ATC), Meteorologie aeronautică (MET), Coordonare platformă / Apron (APR).
+- Semafor pe orizont de 30/60/90 de zile. Roșu = pleacă în perioadă (demisie / final de contract), lipsește ≥ jumătate din perioadă
+  (minim 21 de zile) sau o certificare obligatorie a expirat / expiră în 14 zile. Portocaliu = absență mai scurtă, certificare de
+  reînnoit în perioadă sau plecare în cele 30 de zile de după. Suprascrierea manuală a adminului are prioritate cât e valabilă.
+- Necesarul de oameni al unui departament = ore-om pe săptămână din profilul de acoperire / 40h × 1,2 (zile libere, concedii).
+- Zilele de pregătire sunt pe skill (`Skill.trainingDays`, ex. AVSEC 10, raze X 15/nivel, licență ATC 240); reînnoirea unei
+  certificări = ~30% din curs (2–10 zile). Prelungirea propusă implicit: 30 de zile (necesită acordul persoanei).
 
 ## Note tehnice
 
