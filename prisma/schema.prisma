@@ -62,6 +62,24 @@ enum CandidateStatus {
   REJECTED
 }
 
+enum ProjectType {
+  COURSE
+  PRESENTATION
+  COMPETITION
+  HACKATHON
+  INTERNSHIP
+  OPEN_DAY
+  WEBINAR
+}
+
+enum ProjectStatus {
+  PROPOSED
+  PLANNED
+  ONGOING
+  DONE
+  CANCELLED
+}
+
 enum AiMode {
   EMPLOYEE
   ADMIN_SIM
@@ -128,6 +146,11 @@ model Employee {
   active      Boolean           @default(true)
   /// fixed-term contracts: last day of the contract
   contractEndDate DateTime?     @db.Date
+  /// former employees (active = false): when and why they left, and whether we'd hire them again
+  leftAt         DateTime?      @db.Date
+  leaveReason    String?
+  rehireEligible Boolean        @default(true)
+  leaveNote      String?
   user        User?
   skills      EmployeeSkill[]
   assignments ShiftAssignment[]
@@ -189,10 +212,15 @@ model Candidate {
   consentAt       DateTime?
   status          CandidateStatus  @default(NEW)
   notes           String?
+  /// the recruiting project (course, presentation, competition…) where we met the candidate
+  projectId       String?
+  project         RecruitingProject? @relation(fields: [projectId], references: [id], onDelete: SetNull)
   hiredEmployeeId String?          @unique
   hiredEmployee   Employee?        @relation("CandidateHired", fields: [hiredEmployeeId], references: [id], onDelete: SetNull)
   skills          CandidateSkill[]
   createdAt       DateTime         @default(now())
+
+  @@index([projectId])
 }
 
 model CandidateSkill {
@@ -469,4 +497,22 @@ model AiMessage {
   content        String
   toolCalls      Json?
   createdAt      DateTime       @default(now())
+}
+
+/// Courses, presentations, competitions… organised with faculties to meet future employees.
+model RecruitingProject {
+  id                String        @id @default(cuid())
+  title             String
+  type              ProjectType
+  institution       String
+  /// department codes the project is meant to recruit for
+  targetDepartments String[]
+  startDate         DateTime?     @db.Date
+  endDate           DateTime?     @db.Date
+  status            ProjectStatus @default(PROPOSED)
+  description       String?
+  expectedReach     Int?
+  createdById       String?
+  createdAt         DateTime      @default(now())
+  candidates        Candidate[]
 }

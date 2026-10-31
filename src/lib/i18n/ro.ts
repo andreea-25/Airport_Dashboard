@@ -152,7 +152,7 @@ export const ro = {
     placeholder: "Scrie un mesaj… (ex. „Ce îmi lipsește ca să ajung Senior?”)",
     send: "Trimite",
     thinking: "Asistentul se gândește…",
-    unavailable: "Asistentul AI nu este disponibil acum (Ollama nu răspunde). Restul aplicației funcționează normal.",
+    unavailable: "Asistentul AI nu este disponibil acum. Restul aplicației funcționează normal.",
     confirmTitle: "Confirmi trimiterea cererii?",
     confirmed: "Cererea a fost trimisă către administrator.",
     cancelled: "Cererea a fost anulată.",
@@ -271,7 +271,7 @@ export const ro = {
     dismiss: "Ignoră",
     estimatedImpact: "Impact estimat (calculat de motorul de simulare)",
     noSuggestions: "Nicio sugestie încă.",
-    rulesFallback: "Ollama nu e disponibil — am salvat cele mai bune variante găsite de optimizator (fără AI).",
+    rulesFallback: "AI-ul nu e disponibil — am salvat cele mai bune variante găsite de optimizator (fără AI).",
     statuses: { PENDING: "În așteptare", APPLIED: "Aplicată", DISMISSED: "Ignorată" },
     violationTypes: {
       REST_TOO_SHORT: "Repaus insuficient",

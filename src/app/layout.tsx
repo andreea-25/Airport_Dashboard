@@ -6,8 +6,9 @@ export const metadata: Metadata = { title: ro.app.name, description: ro.app.tagl
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="ro">
-      <body>{children}</body>
+    <html lang="ro" suppressHydrationWarning>
+      {/* Browser extensions (e.g. Grammarly) add attributes to <body>; ignore those mismatches. */}
+      <body suppressHydrationWarning>{children}</body>
     </html>
   );
 }

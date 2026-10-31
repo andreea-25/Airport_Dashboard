@@ -11,6 +11,16 @@ import { ro } from "@/lib/i18n/ro";
 const body = z.object({ scenarioId: z.string(), prompt: z.string().max(1000).optional(), conversationId: z.string().nullish() });
 
 export async function POST(req: Request) {
+  // never answer with an empty 500: the panel shows `error` + `detail`
+  try {
+    return await handle(req);
+  } catch (e) {
+    console.error("[ai-sim] unhandled", e);
+    return NextResponse.json({ error: ro.common.errorGeneric, detail: (e as Error)?.message ?? String(e) }, { status: 500 });
+  }
+}
+
+async function handle(req: Request) {
   const session = await getSession();
   if (!session || session.role !== "ADMIN") return NextResponse.json({ error: "Acces interzis" }, { status: 403 });
   const parsed = body.safeParse(await req.json().catch(() => ({})));
@@ -38,10 +48,17 @@ export async function POST(req: Request) {
   } catch (e) {
     if (!(e instanceof AiUnavailableError)) {
       console.error("[ai-sim]", e);
-      return NextResponse.json({ error: ro.common.errorGeneric }, { status: 500 });
+      return NextResponse.json({ error: ro.common.errorGeneric, detail: (e as Error).message }, { status: 500 });
     }
-    const saved = await saveOptimizerSuggestions(scenarioId, 3);
+    console.error("[ai-sim] AI indisponibil:", e.message);
+    let saved: number;
+    try {
+      saved = await saveOptimizerSuggestions(scenarioId, 3);
+    } catch (e2) {
+      console.error("[ai-sim] optimizer fallback failed", e2);
+      return NextResponse.json({ error: ro.assistant.unavailable, detail: `${e.message} · optimizator: ${(e2 as Error).message}` }, { status: 503 });
+    }
     await audit(session.userId, "Scenario", scenarioId, "OPTIMIZER_SUGGEST", { created: saved, reason: e.message });
-    return NextResponse.json({ source: "OPTIMIZER", conversationId, reply: ro.sim.rulesFallback, created: saved });
+    return NextResponse.json({ source: "OPTIMIZER", conversationId, reply: `${ro.sim.rulesFallback}\nMotiv: ${e.message}`, created: saved });
   }
 }

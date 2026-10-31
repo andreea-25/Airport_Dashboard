@@ -12,6 +12,7 @@ import "dotenv/config"; // must be first: the database client reads DATABASE_URL
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { runAgent } from "../../src/lib/ai/agent";
 import { ollamaConfig, ollamaHealth } from "../../src/lib/ai/ollama";
+import { llmConfig, llmHealth } from "../../src/lib/ai/llm";
 import { addDaysStr, localToUtc, periodRange, SHIFT_PERIODS, type ShiftPeriod } from "../../src/lib/time";
 import type { Session } from "../../src/lib/auth";
 import { INTENTS } from "./intents";
@@ -97,10 +98,15 @@ function check(expect: Expect, calls: Rec[], reply: string, extra: { suggestionD
 async function main() {
   const modelArg = flag("model");
   if (modelArg) process.env.OLLAMA_MODEL = modelArg;
-  const model = ollamaConfig().model;
-  const health = await ollamaHealth();
-  if (!health.ok) throw new Error(`Ollama nu răspunde la ${ollamaConfig().baseUrl}. Pornește Ollama și încearcă din nou.`);
-  if (!health.models?.some((m) => m === model || m === `${model}:latest`)) throw new Error(`Modelul ${model} nu e instalat în Ollama. Rulează: ollama pull ${model}`);
+  const { provider, model } = llmConfig();
+  if (provider === "gemini") {
+    const health = await llmHealth();
+    if (!health.ok) throw new Error(`Gemini nu e disponibil: ${health.error}. Verifică GEMINI_API_KEY în .env.`);
+  } else {
+    const health = await ollamaHealth();
+    if (!health.ok) throw new Error(`Ollama nu răspunde la ${ollamaConfig().baseUrl}. Pornește Ollama și încearcă din nou.`);
+    if (!health.models?.some((m) => m === model || m === `${model}:latest`)) throw new Error(`Modelul ${model} nu e instalat în Ollama. Rulează: ollama pull ${model}`);
+  }
 
   const only = flag("only");
   const modeFilter = flag("mode");
@@ -121,7 +127,7 @@ async function main() {
   const [scenarioId] = needsAdmin ? await makeTempScenarios(admin.id, EVAL_PREFIX, ["plain"], [1]) : [];
   const adminFacts = scenarioId ? await factsFor({ mode: "ADMIN_SIM", session: adminSession, scenarioId }, 5) : undefined;
 
-  console.log(`Model: ${model} · ${cases.length} cazuri de test\n`);
+  console.log(`Model: ${model} (${provider}) · ${cases.length} cazuri de test\n`);
   const today = todayStr();
   const results: { id: string; category: string; mode: string; prompt: string; pass: boolean; checks: Check[]; calls: Rec[]; reply: string; ms: number }[] = [];
 

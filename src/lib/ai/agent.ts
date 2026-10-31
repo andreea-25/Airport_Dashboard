@@ -1,10 +1,13 @@
 import { prisma } from "../db";
 import type { Session } from "../auth";
 import { fmt, promptCalendar } from "../time";
-import { ollamaChat, ollamaConfig, type OllamaMessage } from "./ollama";
+import type { OllamaMessage } from "./ollama";
+import { llmChat, llmConfig } from "./llm";
 import { toolsFor, type ToolContext } from "./tools";
 
 const MAX_STEPS = 6;
+/** Earlier questions kept in the prompt (only the question and the final answer, not tool results). */
+const MAX_PAST_TURNS = 4;
 
 /** System prompt (exported so the training-data generator uses exactly the same text). */
 export function systemPrompt(mode: "EMPLOYEE" | "ADMIN_SIM", who: string, at: Date = new Date()) {
@@ -70,21 +73,48 @@ export type AgentResult = {
   pendingRequest?: { type: string; details: string; summary: string };
 };
 
-/** Load the stored conversation as Ollama messages (last N to stay within 8k context). */
+/**
+ * Load the stored conversation for the model.
+ * Earlier questions: only the user message and the final answer (old tool results are large and
+ * would push the system prompt out of a small context). Current question: everything.
+ */
 async function history(conversationId: string): Promise<OllamaMessage[]> {
-  const msgs = await prisma.aiMessage.findMany({ where: { conversationId }, orderBy: { createdAt: "asc" } });
-  const out: OllamaMessage[] = [];
-  for (const m of msgs.slice(-24)) {
-    if (m.role === "user") out.push({ role: "user", content: m.content });
-    else if (m.role === "assistant") {
-      const tc = (m.toolCalls as { calls?: OllamaMessage["tool_calls"] } | null)?.calls;
-      out.push({ role: "assistant", content: m.content, ...(tc?.length ? { tool_calls: tc } : {}) });
-    } else if (m.role === "tool") {
-      out.push({ role: "tool", content: m.content.slice(0, 6000), tool_name: (m.toolCalls as { name?: string } | null)?.name });
+  const msgs = await prisma.aiMessage.findMany({ where: { conversationId }, orderBy: { createdAt: "asc" }, take: -200 });
+  const lastUser = msgs.map((m) => m.role).lastIndexOf("user");
+  const past: OllamaMessage[][] = [];
+  for (const m of lastUser >= 0 ? msgs.slice(0, lastUser) : []) {
+    if (m.role === "user") past.push([{ role: "user", content: m.content }]);
+    else if (m.role === "assistant" && past.length && m.content.trim() && !(m.toolCalls as { calls?: unknown[] } | null)?.calls?.length) {
+      past[past.length - 1].push({ role: "assistant", content: m.content });
     }
   }
-  // never start with an orphan tool message
-  while (out.length && out[0].role === "tool") out.shift();
+  const current: OllamaMessage[] = [];
+  for (const m of lastUser >= 0 ? msgs.slice(lastUser) : []) {
+    if (m.role === "user") current.push({ role: "user", content: m.content });
+    else if (m.role === "assistant") {
+      const tc = (m.toolCalls as { calls?: OllamaMessage["tool_calls"] } | null)?.calls;
+      current.push({ role: "assistant", content: m.content, ...(tc?.length ? { tool_calls: tc } : {}) });
+    } else if (m.role === "tool") {
+      current.push({ role: "tool", content: m.content.slice(0, 6000), tool_name: (m.toolCalls as { name?: string } | null)?.name });
+    }
+  }
+  return [...past.slice(-MAX_PAST_TURNS).flat(), ...current];
+}
+
+/**
+ * Keep the prompt within the model's context: drop the oldest past messages first, then shorten
+ * tool results. The system prompt (index 0) and the current question are never dropped.
+ */
+function fitToBudget(messages: OllamaMessage[], toolsChars: number): OllamaMessage[] {
+  const budget = llmConfig().maxPromptChars - toolsChars;
+  const size = (ms: OllamaMessage[]) => ms.reduce((n, m) => n + m.content.length + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0), 0);
+  const out = [...messages];
+  const currentStart = () => out.map((m) => m.role).lastIndexOf("user");
+  while (size(out) > budget && currentStart() > 1) out.splice(1, 1);
+  for (const limit of [3000, 1500, 600]) {
+    if (size(out) <= budget) break;
+    for (let i = 0; i < out.length; i++) if (out[i].role === "tool" && out[i].content.length > limit) out[i] = { ...out[i], content: out[i].content.slice(0, limit) + " …(trunchiat)" };
+  }
   return out;
 }
 
@@ -98,14 +128,15 @@ export async function runAgent(opts: { session: Session; conversationId: string;
   await prisma.aiMessage.create({ data: { conversationId, role: "user", content: opts.userMessage } });
   const messages: OllamaMessage[] = [{ role: "system", content: systemPrompt(mode, who) }, ...(await history(conversationId))];
   const used: AgentResult["toolCalls"] = [];
+  const toolsChars = JSON.stringify(defs).length;
   let pending: AgentResult["pendingRequest"];
   let pendingId: string | undefined;
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    const reply = await ollamaChat(messages, defs);
+    const { message: reply, provider, model } = await llmChat(fitToBudget(messages, toolsChars), defs);
     const calls = reply.tool_calls ?? [];
     await prisma.aiMessage.create({
-      data: { conversationId, role: "assistant", content: reply.content ?? "", toolCalls: calls.length ? ({ calls, model: ollamaConfig().model } as object) : undefined },
+      data: { conversationId, role: "assistant", content: reply.content ?? "", toolCalls: calls.length ? ({ calls, model, provider } as object) : undefined },
     });
     messages.push({ role: "assistant", content: reply.content ?? "", ...(calls.length ? { tool_calls: calls } : {}) });
     if (!calls.length) {

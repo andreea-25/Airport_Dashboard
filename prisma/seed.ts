@@ -191,6 +191,7 @@ function requirementsFor(dept: DeptDef, rank: number): { skills: [string, number
 async function reset() {
   await prisma.candidateSkill.deleteMany();
   await prisma.candidate.deleteMany();
+  await prisma.recruitingProject.deleteMany();
   await prisma.readinessOverride.deleteMany();
   await prisma.availabilityEvent.deleteMany();
   await prisma.aiMessage.deleteMany();

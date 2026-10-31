@@ -65,11 +65,35 @@ export async function saveEmployee(id: string | null, input: z.input<typeof empl
 }
 
 /** No physical deletion: employees are deactivated. */
-export async function setEmployeeActive(id: string, active: boolean): Promise<Result> {
+export async function setEmployeeActive(
+  id: string,
+  active: boolean,
+  leave?: { leftAt?: string | null; reason?: string | null; rehireEligible?: boolean; note?: string | null },
+): Promise<Result> {
   try {
     const s = await assertAdmin();
-    await prisma.employee.update({ where: { id }, data: { active } });
-    await audit(s.userId, "Employee", id, active ? "ACTIVATE" : "DEACTIVATE");
+    const info = z
+      .object({
+        leftAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable().or(z.literal("")),
+        reason: z.enum(["RESIGNATION", "CONTRACT_END", "RETIREMENT", "OTHER"]).optional().nullable(),
+        rehireEligible: z.boolean().optional(),
+        note: z.string().trim().max(1000).optional().nullable(),
+      })
+      .parse(leave ?? {});
+    await prisma.employee.update({
+      where: { id },
+      data: active
+        ? // coming back: the previous departure stays in the audit log
+          { active, leftAt: null, leaveReason: null, leaveNote: null, rehireEligible: true }
+        : {
+            active,
+            leftAt: dateOnly(info.leftAt || localDateStr(new Date())),
+            leaveReason: info.reason ?? "OTHER",
+            rehireEligible: info.rehireEligible ?? true,
+            leaveNote: info.note || null,
+          },
+    });
+    await audit(s.userId, "Employee", id, active ? "ACTIVATE" : "DEACTIVATE", active ? undefined : info);
     revalidatePath("/admin/employees");
     revalidatePath(`/admin/employees/${id}`);
     return { ok: true };

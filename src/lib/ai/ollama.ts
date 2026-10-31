@@ -1,4 +1,10 @@
-export type OllamaToolCall = { function: { name: string; arguments: Record<string, unknown> | string } };
+export type OllamaToolCall = {
+  /** set by Gemini (OpenAI-compatible API); Ollama ignores it */
+  id?: string;
+  function: { name: string; arguments: Record<string, unknown> | string };
+  /** Gemini "thought signature" — must be sent back unchanged with the call */
+  extra_content?: unknown;
+};
 export type OllamaMessage = {
   role: "system" | "user" | "assistant" | "tool";
   content: string;

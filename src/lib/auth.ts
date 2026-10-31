@@ -2,6 +2,8 @@ import "server-only";
 import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
 import { redirect } from "next/navigation";
+import { cache } from "react";
+import { prisma } from "./db";
 import type { Role } from "@/generated/prisma/enums";
 
 const COOKIE = "aw_session";
@@ -50,9 +52,18 @@ export async function verifyToken(token: string | undefined): Promise<Session | 
   }
 }
 
-export async function getSession(): Promise<Session | null> {
-  return verifyToken((await cookies()).get(COOKIE)?.value);
-}
+/**
+ * Session from the cookie, checked against the database (once per request).
+ * After `db:seed` / `local:reset` the users get new ids, so an old cookie points to nobody:
+ * treat it as logged out instead of failing later on foreign keys.
+ */
+export const getSession = cache(async (): Promise<Session | null> => {
+  const s = await verifyToken((await cookies()).get(COOKIE)?.value);
+  if (!s) return null;
+  const u = await prisma.user.findUnique({ where: { id: s.userId }, select: { id: true, role: true, employeeId: true, email: true } });
+  if (!u) return null;
+  return { userId: u.id, role: u.role, employeeId: u.employeeId, email: u.email };
+});
 
 /** For pages: redirect to /login if not authenticated. */
 export async function requireSession(): Promise<Session> {

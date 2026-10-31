@@ -153,7 +153,12 @@ const changeItems = {
   type: "array",
   description:
     "Listă de modificări. Tipuri: MOVE_EMPLOYEE_TEAM{employeeId,teamId}; SWAP_TEAMS{teamAId,teamBId}; ADD_ASSIGNMENT{shiftId,employeeId,positionId?}; REMOVE_ASSIGNMENT{assignmentId}; MOVE_ASSIGNMENT{assignmentId,toShiftId}; CHANGE_SHIFT_HOURS{departmentId,teamId?,fromStart?(HH:mm),shiftId?,startTime(HH:mm),endTime(HH:mm)}; SET_EMPLOYEE_LEVEL{employeeId,levelId}. Folosește exact ID-urile primite de la unelte.",
-  items: { type: "object", properties: { type: { type: "string" } }, required: ["type"] },
+  // every field is listed: models with strict schemas (e.g. Gemini) only fill properties that are declared
+  items: {
+    type: "object",
+    properties: Object.fromEntries(["type", "employeeId", "teamId", "teamAId", "teamBId", "shiftId", "positionId", "assignmentId", "toShiftId", "departmentId", "fromStart", "startTime", "endTime", "levelId"].map((k) => [k, { type: "string" }])),
+    required: ["type"],
+  },
 };
 
 export const adminTools: ToolDef[] = [

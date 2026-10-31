@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db";
 import { assertAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { addDaysStr, dateOnly, localDateStr, localToUtc, mondayOf } from "@/lib/time";
-import { applyChanges, createScenarioFromReal } from "@/lib/sim/scenario";
+import { applyChanges, createScenarioFromReal, loadScenarioData } from "@/lib/sim/scenario";
 import { loadTeamData } from "@/lib/team/readiness";
 import { proposeReplacements } from "@/lib/team/replacement";
 
@@ -170,6 +170,7 @@ const candidateSchema = z.object({
   availableFrom: optDate,
   consent: z.boolean(),
   notes: z.string().trim().max(2000).optional().nullable(),
+  projectId: z.string().optional().nullable(),
 });
 
 export async function saveCandidate(id: string | null, input: z.input<typeof candidateSchema>): Promise<Result> {
@@ -190,6 +191,7 @@ export async function saveCandidate(id: string | null, input: z.input<typeof can
       interests: d.interests,
       availableFrom: d.availableFrom ? dateOnly(d.availableFrom) : null,
       notes: d.notes || null,
+      projectId: d.projectId || null,
     };
     if (id) {
       const before = await prisma.candidate.findUniqueOrThrow({ where: { id } });
@@ -323,6 +325,108 @@ export async function hireCandidate(input: z.input<typeof hireSchema>): Promise<
     revalidatePath("/admin/employees");
     revalidatePath("/admin/team");
     return { ok: true, id: emp.id };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+// ---------------------------------------------------------------- recruiting projects
+
+const projectSchema = z.object({
+  title: z.string().trim().min(3, "obligatoriu"),
+  type: z.enum(["COURSE", "PRESENTATION", "COMPETITION", "HACKATHON", "INTERNSHIP", "OPEN_DAY", "WEBINAR"]),
+  institution: z.string().trim().min(2, "obligatoriu"),
+  targetDepartments: z.array(z.string()).default([]),
+  startDate: optDate,
+  endDate: optDate,
+  status: z.enum(["PROPOSED", "PLANNED", "ONGOING", "DONE", "CANCELLED"]),
+  description: z.string().trim().max(3000).optional().nullable(),
+  expectedReach: z.coerce.number().int().min(0).max(100000).optional().nullable().or(z.literal("")),
+});
+
+export async function saveProject(id: string | null, input: z.input<typeof projectSchema>): Promise<Result> {
+  try {
+    const s = await assertAdmin();
+    const d = projectSchema.parse(input);
+    if (d.startDate && d.endDate && d.endDate < d.startDate) return { error: "Data de sfârșit e înaintea celei de început." };
+    const values = {
+      title: d.title,
+      type: d.type,
+      institution: d.institution,
+      targetDepartments: d.targetDepartments,
+      startDate: d.startDate ? dateOnly(d.startDate) : null,
+      endDate: d.endDate ? dateOnly(d.endDate) : null,
+      status: d.status,
+      description: d.description || null,
+      expectedReach: d.expectedReach === "" || d.expectedReach == null ? null : Number(d.expectedReach),
+    };
+    if (id) {
+      await prisma.recruitingProject.update({ where: { id }, data: values });
+      await audit(s.userId, "RecruitingProject", id, "UPDATE", values);
+    } else {
+      const p = await prisma.recruitingProject.create({ data: { ...values, createdById: s.userId } });
+      id = p.id;
+      await audit(s.userId, "RecruitingProject", id, "CREATE", values);
+    }
+    revalidatePath("/admin/candidates");
+    return { ok: true, id };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Deleting a project keeps its candidates (they just lose the link). */
+export async function deleteProject(id: string): Promise<Result> {
+  try {
+    const s = await assertAdmin();
+    await prisma.recruitingProject.delete({ where: { id } });
+    await audit(s.userId, "RecruitingProject", id, "DELETE");
+    revalidatePath("/admin/candidates");
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+// ---------------------------------------------------------------- former employees: simulate rehiring
+
+export async function simulateRehire(input: { employeeId: string; departmentId: string; teamId: string; startDate?: string | null }): Promise<Result> {
+  try {
+    const s = await assertAdmin();
+    const d = z.object({ employeeId: z.string(), departmentId: z.string(), teamId: z.string().min(1, "alege echipa"), startDate: optDate }).parse(input);
+    const emp = await prisma.employee.findUnique({ where: { id: d.employeeId } });
+    if (!emp) return { error: "Angajat inexistent" };
+    if (emp.active) return { error: "Persoana e deja angajată." };
+    const team = await prisma.team.findUnique({ where: { id: d.teamId }, include: { department: true } });
+    if (!team || team.departmentId !== d.departmentId) return { error: "Echipa nu aparține departamentului ales." };
+
+    const monday = mondayOf(new Date());
+    const sc = await createScenarioFromReal({
+      name: `Reangajare: ${emp.firstName} ${emp.lastName} → ${team.department.name}, ${team.name}`.slice(0, 120),
+      createdById: s.userId,
+      periodStart: localToUtc(monday, "00:00"),
+      periodEnd: localToUtc(addDaysStr(monday, 21), "00:00"),
+      notes: `Simulare: ${emp.firstName} ${emp.lastName} revine în ${team.department.name} (${team.name})${d.startDate ? ` din ${d.startDate.split("-").reverse().join(".")}` : ""}. Nimic nu se schimbă în fișa reală până nu îl reactivezi.`,
+    });
+    const changes: unknown[] = [];
+    if (emp.teamId !== team.id) changes.push({ type: "MOVE_EMPLOYEE_TEAM", employeeId: emp.id, teamId: team.id });
+    // the person follows the team's schedule, 5 shifts a week, from the start date (after certificate renewals)
+    const data = await loadScenarioData(sc.id);
+    const from = d.startDate ?? localDateStr(new Date());
+    const perWeek: Record<string, number> = {};
+    for (const sh of [...data.shifts].sort((a, b) => a.startAt.getTime() - b.startAt.getTime())) {
+      if (sh.teamId !== team.id) continue;
+      const day = localDateStr(sh.startAt);
+      if (day < from) continue;
+      const wk = mondayOf(sh.startAt);
+      if ((perWeek[wk] ?? 0) >= 5) continue;
+      perWeek[wk] = (perWeek[wk] ?? 0) + 1;
+      changes.push({ type: "ADD_ASSIGNMENT", shiftId: sh.id, employeeId: emp.id });
+    }
+    if (changes.length) await applyChanges(sc.id, changes, `Reangajare ${emp.firstName} ${emp.lastName}`);
+    await audit(s.userId, "Scenario", sc.id, "CREATE_REHIRE_SIMULATION", { employeeId: emp.id, teamId: team.id });
+    revalidatePath("/admin/simulation");
+    return { ok: true, id: sc.id };
   } catch (e) {
     return fail(e);
   }

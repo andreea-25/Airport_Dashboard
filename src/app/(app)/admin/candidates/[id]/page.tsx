@@ -15,16 +15,18 @@ import HireForm from "@/components/team/HireForm";
 export const dynamic = "force-dynamic";
 const d = (x: Date | null) => (x ? x.toISOString().slice(0, 10) : "");
 
-export default async function CandidatePage({ params }: { params: Promise<{ id: string }> }) {
+export default async function CandidatePage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ project?: string }> }) {
   await requireAdminPage();
   const { id } = await params;
+  const sp = await searchParams;
   const isNew = id === "new";
-  const [c, departments, teams, levels, skills] = await Promise.all([
+  const [c, departments, teams, levels, skills, projects] = await Promise.all([
     isNew ? null : prisma.candidate.findUnique({ where: { id }, include: { skills: { include: { skill: true } }, hiredEmployee: true } }),
     prisma.department.findMany({ orderBy: { name: "asc" } }),
     prisma.team.findMany({ orderBy: { name: "asc" } }),
     prisma.level.findMany({ orderBy: { rank: "asc" } }),
     prisma.skill.findMany({ orderBy: { name: "asc" } }),
+    prisma.recruitingProject.findMany({ where: { status: { not: "CANCELLED" } }, orderBy: { startDate: "desc" } }),
   ]);
   if (!isNew && !c) notFound();
   const matches = c ? candidateMatches(await loadTeamData(), c.id, 60) : [];
@@ -59,10 +61,13 @@ export default async function CandidatePage({ params }: { params: Promise<{ id: 
                       availableFrom: d(c.availableFrom),
                       notes: c.notes ?? "",
                       consent: !!c.consentAt,
+                      projectId: c.projectId ?? "",
                     }
                   : undefined
               }
               departments={deptOpts}
+              projects={projects.map((p) => ({ id: p.id, title: p.title, startDate: d(p.startDate), targetDepartments: p.targetDepartments }))}
+              initialProjectId={isNew && sp.project ? sp.project : undefined}
             />
           </section>
           {c && (

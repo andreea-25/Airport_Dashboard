@@ -151,6 +151,17 @@ try {
     await run("npx", ["tsx", "prisma/seed.ts"]);
     writeFileSync(seededMarker, new Date().toISOString());
   }
+  // newer demo data (candidates from Craiova, recruiting projects, former employees) added once to an existing
+  // database, without deleting anything
+  const recruitingMarker = path.join(dataDir, ".seeded-recruiting");
+  if (!existsSync(recruitingMarker)) {
+    try {
+      await run("npx", ["tsx", "scripts/seed-extra.ts"]);
+      writeFileSync(recruitingMarker, new Date().toISOString());
+    } catch {
+      console.warn("(Nu am putut adăuga datele demo noi; rulează manual: npm run db:seed-extra)");
+    }
+  }
 
   if (args.has("--setup")) {
     console.log("\n✓ Baza de date este pregătită (migrații + date demo).");

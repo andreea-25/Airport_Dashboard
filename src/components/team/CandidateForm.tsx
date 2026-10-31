@@ -20,9 +20,21 @@ type C = {
   availableFrom: string;
   notes: string;
   consent: boolean;
+  projectId: string;
 };
+type Proj = { id: string; title: string; startDate: string; targetDepartments: string[] };
 
-export default function CandidateForm({ candidate, departments }: { candidate?: C; departments: { id: string; name: string; code: string }[] }) {
+export default function CandidateForm({
+  candidate,
+  departments,
+  projects,
+  initialProjectId,
+}: {
+  candidate?: C;
+  departments: { id: string; name: string; code: string }[];
+  projects: Proj[];
+  initialProjectId?: string;
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
@@ -41,6 +53,14 @@ export default function CandidateForm({ candidate, departments }: { candidate?: 
       availableFrom: "",
       notes: "",
       consent: false,
+      projectId: initialProjectId ?? "",
+      ...(initialProjectId
+        ? {
+            event: projects.find((p) => p.id === initialProjectId)?.title ?? "",
+            eventDate: projects.find((p) => p.id === initialProjectId)?.startDate ?? "",
+            interests: projects.find((p) => p.id === initialProjectId)?.targetDepartments ?? [],
+          }
+        : {}),
     },
   );
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setF((p) => ({ ...p, [k]: e.target.value }));
@@ -59,12 +79,30 @@ export default function CandidateForm({ candidate, departments }: { candidate?: 
         {field("lastName", ro.admin.lastName)}
         {field("email", ro.admin.email, "email")}
         {field("phone", ro.admin.phone)}
-        {field("university", "Universitate / școală", "text", "ex. Universitatea Politehnica București")}
-        {field("specialization", "Specializare", "text", "ex. Inginerie aerospațială")}
+        {field("university", "Universitate / școală", "text", "ex. Universitatea din Craiova – Facultatea de Mecanică")}
+        {field("specialization", "Specializare", "text", "ex. Ingineria transporturilor")}
         {field("studyYear", "An de studiu", "text", "ex. Anul III / Master I / Absolvent")}
         {field("availableFrom", "Disponibil din", "date")}
         {field("event", "Unde l-am cunoscut", "text", "ex. Hackathon Aeroport 2026, prezentare la facultate")}
         {field("eventDate", "Data evenimentului", "date")}
+      </div>
+      <div>
+        <label className="label">Proiect de recrutare (opțional)</label>
+        <select
+          className="input"
+          value={f.projectId}
+          onChange={(e) => {
+            const pr = projects.find((p) => p.id === e.target.value);
+            setF((p) => ({ ...p, projectId: e.target.value, ...(pr ? { event: pr.title, eventDate: pr.startDate || p.eventDate, interests: p.interests.length ? p.interests : pr.targetDepartments } : {}) }));
+          }}
+        >
+          <option value="">— fără proiect (eveniment scris liber) —</option>
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.title}
+            </option>
+          ))}
+        </select>
       </div>
       <div>
         <label className="label">Departamente de interes</label>

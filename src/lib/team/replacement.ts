@@ -59,7 +59,7 @@ function needOf(data: TeamData, emp: TeamEmployee): { position: string | null; n
 }
 
 /** Missing skills (and expired / soon-expiring certificates) of a person against a need, with training days. */
-function gapFor(data: TeamData, skills: Map<string, { proficiency: number; expiresAt: string | null }>, need: Need, validUntil: string): GapSkill[] {
+export function gapFor(data: TeamData, skills: Map<string, { proficiency: number; expiresAt: string | null }>, need: Need, validUntil: string): GapSkill[] {
   const out: GapSkill[] = [];
   for (const n of need) {
     const sk = data.skillById.get(n.skillId)!;
@@ -74,8 +74,8 @@ function gapFor(data: TeamData, skills: Map<string, { proficiency: number; expir
   }
   return out;
 }
-const gapDays = (g: GapSkill[]) => g.reduce((a, s) => a + s.days, 0);
-const gapText = (g: GapSkill[]) => g.map((s) => `${s.name} (${s.days} zile)`).join(", ");
+export const gapDays = (g: GapSkill[]) => g.reduce((a, s) => a + s.days, 0);
+export const gapText = (g: GapSkill[]) => g.map((s) => `${s.name} (${s.days} zile)`).join(", ");
 
 export type WhatIf = { type: string; start: string; end?: string | null };
 

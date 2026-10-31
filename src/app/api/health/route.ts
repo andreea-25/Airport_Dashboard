@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { ollamaConfig, ollamaHealth } from "@/lib/ai/ollama";
+import { llmHealth } from "@/lib/ai/llm";
 
 export async function GET() {
   let db = false;
@@ -10,6 +10,5 @@ export async function GET() {
   } catch {
     db = false;
   }
-  const ollama = await ollamaHealth();
-  return NextResponse.json({ db, ollama: { ...ollama, configuredModel: ollamaConfig().model } });
+  return NextResponse.json({ db, ai: await llmHealth() });
 }

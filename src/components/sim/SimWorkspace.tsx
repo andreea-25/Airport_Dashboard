@@ -435,8 +435,8 @@ function SuggestionsPanel({ scenarioId, suggestions, pending, onApply, onDismiss
     setReply(null);
     try {
       const res = await fetch("/api/admin/sim/suggest", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scenarioId, prompt, conversationId: conv }) });
-      const j = await res.json();
-      if (!res.ok) setReply({ source: "ERR", text: j.error ?? ro.common.errorGeneric });
+      const j = await res.json().catch(() => ({ error: `${ro.common.errorGeneric} (HTTP ${res.status})` }));
+      if (!res.ok) setReply({ source: "ERR", text: [j.error ?? ro.common.errorGeneric, j.detail].filter(Boolean).join("\n") });
       else {
         setConv(j.conversationId);
         setReply({ source: j.source, text: j.reply, tools: j.toolCalls?.map((t: { name: string }) => t.name) });

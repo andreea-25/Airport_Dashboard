@@ -94,11 +94,12 @@ regenerează clientul Prisma dacă s-a schimbat `prisma/schema.prisma` și recon
 | `npm run local:db` | pornește doar baza de date (apoi `npm run dev` în alt terminal) |
 | `npm run local:reset` | șterge baza locală (`.pgdata`) și o reface de la zero, cu datele demo |
 | `npm run db:seed` | regenerează datele demo (cu baza pornită) |
+| `npm run db:seed-extra` | adaugă datele demo noi (candidați din Craiova, proiecte, foști angajați) fără să șteargă nimic; `npm run local` îl rulează automat o dată |
 | `npm run db:migrate` | creează o migrație nouă după ce ai modificat `prisma/schema.prisma` (cu baza pornită) |
 | `npm run typecheck` | verifică tipurile TypeScript |
 | `npm run build` | build de producție (verificare înainte de demo) |
 | `npm run mock:ollama` | server AI simulat pe portul 11434, pentru test fără GPU |
-| `http://localhost:3000/api/health` | arată dacă baza de date și Ollama răspund |
+| `http://localhost:3000/api/health` | arată dacă baza de date și AI-ul (Ollama sau Gemini) răspund |
 
 Datele demo sunt generate relativ la ziua în care rulezi seed-ul (2 săptămâni în urmă → 2 săptămâni înainte).
 Rulează `npm run db:seed` sau `npm run local:reset` înainte de prezentare.
@@ -108,6 +109,20 @@ Rulează `npm run db:seed` sau `npm run local:reset` înainte de prezentare.
 - **`npm run local`** (modul dezvoltare) compilează fiecare pagină la prima vizitare, așa că prima deschidere a unei pagini durează 1–5 secunde; după aceea merge mai repede. Modificările din cod apar imediat în browser. Folosește-l când scrii cod.
 - **`npm run local:prod`** construiește întâi aplicația optimizată (aproximativ 1 minut, doar când s-a schimbat codul), apoi paginile se schimbă în ~0,1 secunde. Folosește-l când doar testezi aplicația sau la prezentare. Modificările din cod apar abia la următoarea pornire.
 - Pe Windows, antivirusul (Microsoft Defender) poate încetini mult modul dezvoltare. Opțional: Setări Windows → Securitate Windows → Protecție împotriva virușilor → Excluderi → adaugă folderul proiectului.
+
+## AI cu Gemini (Google, opțional)
+
+Alternativă la Ollama, fără GPU, dar cu internet. Ia o cheie gratuită din https://aistudio.google.com/apikey și pune în `.env`:
+
+```bash
+AI_PROVIDER="gemini"
+GEMINI_API_KEY="cheia-ta"
+GEMINI_MODEL="gemini-flash-latest"
+AI_FALLBACK="ollama"   # dacă Gemini nu răspunde, încearcă Ollama local
+```
+
+Repornește aplicația. `http://localhost:3000/api/health` arată ce furnizor e folosit și dacă răspunde.
+Atenție: pe varianta gratuită limita e de aproximativ 15 cereri/minut (o întrebare poate face 2–6 cereri), iar Google poate folosi conversațiile pentru a-și îmbunătăți modelele. Nu pune cheia în Git (`.env` e ignorat).
 
 ## AI cu Ollama (opțional)
 
@@ -209,8 +224,16 @@ Adminul poate schimba manual culoarea, cu motiv obligatoriu. Fără date medical
   30 de zile + pregătirea unui coleg (cu calculul zilelor de pregătire), candidat extern; fiecare variantă poate fi
   **testată în simulare** (se creează un scenariu cu modificările).
 - **Ce-ar fi dacă…**: simulezi o demisie / un concediu lung fără să salvezi nimic.
-- **Candidați** (`/admin/candidates`): baza de talente (studenți de la facultăți de specialitate, prezentări, concursuri),
-  cu acord GDPR, competențe, status (nou → contactat → interviu → ofertă), „Unde s-ar potrivi” și **Angajează**.
+- **Candidați** (`/admin/candidates`), trei tab-uri:
+  - *Candidați*: baza de talente (studenți și absolvenți din Craiova — Universitatea din Craiova, UMF, licee tehnologice — plus
+    școli de aviație pentru ATC/meteo), cu acord GDPR, competențe, status (nou → contactat → interviu → ofertă), proiectul la care
+    i-am cunoscut, „Unde s-ar potrivi” și **Angajează**.
+  - *Foști angajați*: cei dezactivați (la dezactivare se cer ultima zi, motivul, „eligibil pentru reangajare” și o notă), cu filtre
+    eligibil / neeligibil / departament. **Simulează reangajarea**: aplicația propune departamentul și echipa unde ar ajuta cel mai
+    mult, arată reînnoirile necesare și efectul pe semafor (marja departamentului înainte → după), apoi creează un scenariu în Simulare.
+  - *Proiecte propuse*: cursuri, prezentări, competiții, hackathoane, stagii, zile porți deschise, webinare cu facultățile, cu
+    statistici (candidați, în discuții, angajați, rată de conversie) și **sugestii automate** pentru departamentele cu lipsă de
+    oameni sau competențe critice care nu au deja un proiect în curs.
 - Cod: `src/lib/team/readiness.ts` (semafor + echilibru), `src/lib/team/replacement.ts` (propuneri), `src/app/actions/team.ts`.
 - AI (în chatul din simulare): `get_team_readiness`, `propose_replacements` (acceptă și ipoteze: `what_if: "demisie"`).
 
@@ -238,12 +261,14 @@ AI-ul e „analistul”: alege și combină variantele optimizatorului și expli
 ## Structura
 
 ```
-prisma/schema.prisma, migrations/, seed.ts, seed-team.ts (indisponibilități, contracte, candidați demo)
+prisma/schema.prisma, migrations/, seed.ts, seed-team.ts (indisponibilități, contracte, candidați, proiecte, foști angajați demo)
 src/lib/sim/        motorul de simulare: evaluate.ts (indicatori + scor), changes.ts, scenario.ts (create/apply/undo/preview/compare/skillGap),
                     optimize.ts (optimizatorul), calendar.ts, suggestions.ts
 src/lib/ai/         ollama.ts, tools.ts, agent.ts
-src/lib/team/       readiness.ts (semafor + echilibru pe departamente), replacement.ts (propuneri de soluții, potrivire candidați)
-src/components/team/ ReadinessPanel, WhatIfForm, ApplySolutionButton, CandidateForm/Skills/Status, HireForm
+src/lib/team/       readiness.ts (semafor + echilibru pe departamente), replacement.ts (propuneri de soluții, potrivire candidați),
+                    rehire.ts (foști angajați, analiza reangajării), projects.ts (proiecte de recrutare, statistici, sugestii)
+src/components/team/ ReadinessPanel, WhatIfForm, ApplySolutionButton, CandidateForm/Skills/Status, HireForm,
+                    ProjectForm, SuggestProjectButton, RehireForm
 src/lib/services/   acces la date filtrat pe sesiune (angajat)
 src/app/actions/    server actions (auth, admin, comments, requests, simulation, team)
 src/app/api/        ai/chat, ai/confirm, admin/sim/suggest, health
@@ -267,6 +292,11 @@ scripts/mock-ollama.mjs
 - Necesarul de oameni al unui departament = ore-om pe săptămână din profilul de acoperire / 40h × 1,2 (zile libere, concedii).
 - Zilele de pregătire sunt pe skill (`Skill.trainingDays`, ex. AVSEC 10, raze X 15/nivel, licență ATC 240); reînnoirea unei
   certificări = ~30% din curs (2–10 zile). Prelungirea propusă implicit: 30 de zile (necesită acordul persoanei).
+- Foștii angajați nu se șterg: rămân în baza de date cu `active = false`, `leftAt`, `leaveReason`, `rehireEligible`, `leaveNote`.
+  La reactivare, aceste câmpuri se golesc (plecarea rămâne în jurnalul de modificări).
+- Reangajarea simulată: persoana urmează programul echipei alese, 5 ture pe săptămână, din ziua în care e gata (după reînnoiri).
+- Sugestiile de proiecte folosesc șabloane pe departament legate de instituții din Craiova; pentru ATC și meteo se adaugă școli
+  de aviație / facultăți de fizică din alte orașe, pentru că în Craiova nu există aceste specializări.
 
 ## Note tehnice
 
