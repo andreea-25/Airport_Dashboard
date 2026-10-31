@@ -3,9 +3,11 @@
 //   npm run local          -> database + app (Ctrl+C stops both)
 //   npm run local:db       -> only the database (keep it open, run `npm run dev` elsewhere)
 //   npm run local:reset    -> delete the local database folder and start fresh
+//   npm run local:prod     -> database + optimised production build (fast pages; rebuilds only when code changed)
+//   node scripts/local.mjs --setup -> prepare everything (database, migrations, demo data) and exit (used by npm run setup)
 import "dotenv/config";
 import { spawn } from "node:child_process";
-import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import EmbeddedPostgres from "embedded-postgres";
@@ -47,10 +49,41 @@ function portIsFree(p) {
 }
 
 function run(cmd, cmdArgs) {
+  const line = [cmd, ...cmdArgs].join(" ");
   return new Promise((resolve, reject) => {
-    const p = spawn(cmd, cmdArgs, { stdio: "inherit", shell: true });
-    p.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} ${cmdArgs.join(" ")} exited with ${code}`))));
+    const p = spawn(line, { stdio: "inherit", shell: true });
+    p.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`${line} exited with ${code}`))));
   });
+}
+
+/** The Prisma client is generated code: regenerate it when schema.prisma is newer (e.g. after git pull). */
+function clientIsStale() {
+  const client = path.resolve("src", "generated", "prisma", "client.ts");
+  if (!existsSync(client)) return true;
+  return statSync(path.resolve("prisma", "schema.prisma")).mtimeMs > statSync(client).mtimeMs;
+}
+
+/** Newest modification time of the source files that affect the production build. */
+function newestSourceMtime() {
+  let newest = 0;
+  const walk = (dir) => {
+    if (!existsSync(dir)) return;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === "generated" || entry.name === "node_modules") continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else newest = Math.max(newest, statSync(full).mtimeMs);
+    }
+  };
+  walk(path.resolve("src"));
+  for (const f of ["package.json", "next.config.mjs", "tailwind.config.ts", ".env", "prisma/schema.prisma"]) if (existsSync(f)) newest = Math.max(newest, statSync(f).mtimeMs);
+  return newest;
+}
+
+function needsBuild() {
+  const buildId = path.resolve(".next", "BUILD_ID");
+  if (!existsSync(buildId)) return true;
+  return newestSourceMtime() > statSync(buildId).mtimeMs;
 }
 
 let stopping = false;
@@ -84,6 +117,7 @@ process.on("SIGTERM", () => stop(0));
 
 const initialised = existsSync(path.join(dataDir, "PG_VERSION"));
 const seededMarker = path.join(dataDir, ".seeded");
+let pgStarted = false;
 try {
   if (!(await portIsFree(port))) {
     throw new Error(
@@ -100,6 +134,7 @@ try {
   } catch (e) {
     throw new Error(`PostgreSQL nu a pornit.${e?.message ? " " + e.message : ""}`);
   }
+  pgStarted = true;
   console.log(`PostgreSQL running on localhost:${port} (user ${user}, database ${database})`);
   try {
     await pg.createDatabase(database);
@@ -107,22 +142,36 @@ try {
     /* already exists */
   }
 
+  if (clientIsStale()) {
+    console.log("Regenerating the Prisma client (schema changed)…");
+    await run("npx", ["prisma", "generate"]);
+  }
   await run("npx", ["prisma", "migrate", "deploy"]);
   if (!existsSync(seededMarker) || args.has("--seed")) {
     await run("npx", ["tsx", "prisma/seed.ts"]);
     writeFileSync(seededMarker, new Date().toISOString());
   }
 
-  if (args.has("--db-only")) {
+  if (args.has("--setup")) {
+    console.log("\n✓ Baza de date este pregătită (migrații + date demo).");
+    await stop(0);
+  } else if (args.has("--db-only")) {
     console.log("Database is ready. Press Ctrl+C to stop it.");
     await new Promise(() => {});
   } else {
-    nextProc = spawn("npx", ["next", "dev"], { stdio: "inherit", shell: true, detached: process.platform !== "win32" });
+    const prod = args.has("--prod");
+    if (prod && needsBuild()) {
+      console.log("Building the optimised version (about 1 minute, only when the code changed)…");
+      await run("npx", ["next", "build"]);
+    }
+    // dev: Turbopack compiles pages much faster than webpack; prod: precompiled, fastest navigation
+    const nextArgs = prod ? ["next", "start"] : ["next", "dev", "--turbopack"];
+    nextProc = spawn("npx", nextArgs, { stdio: "inherit", shell: true, detached: process.platform !== "win32" });
     nextProc.on("exit", (code) => stop(code ?? 0));
   }
 } catch (e) {
   console.error("\n✖ " + (e instanceof Error ? e.message : String(e ?? "Eroare necunoscută")));
-  if (pgLog.length) {
+  if (!pgStarted && pgLog.length) {
     console.error("\n--- Mesajele PostgreSQL ---");
     console.error(pgLog.join("").trim().split(/\r?\n/).slice(-25).join("\n"));
     console.error("---------------------------");

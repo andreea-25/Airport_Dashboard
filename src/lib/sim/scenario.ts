@@ -1,14 +1,14 @@
 import { prisma } from "../db";
-import { applyChangeToData, cloneData, SimError } from "./changes";
+import { applyChangeToData, applySettingsToData, cloneData, SimError } from "./changes";
 import { compare, evaluate, type Comparison } from "./evaluate";
 import { changeSchema } from "./schema";
-import type { Change, Evaluation, SimData, SimEmployee, SimOverride, SimShift } from "./types";
+import { defaultSettings, normalizeSettings, type Change, type Evaluation, type ScenarioSettings, type SimData, type SimEmployee, type SimOverride, type SimShift } from "./types";
 
 // ---------------------------------------------------------------------------
 // Loading
 // ---------------------------------------------------------------------------
 
-type Reference = Omit<SimData, "periodStart" | "periodEnd" | "shifts" | "overrides">;
+type Reference = Omit<SimData, "periodStart" | "periodEnd" | "shifts" | "overrides" | "settings">;
 
 async function loadReference(): Promise<Reference> {
   const [employees, positions, staffing, departments, teams, levels, skills] = await Promise.all([
@@ -60,16 +60,32 @@ function applyOverrides(ref: Reference, overrides: Record<string, SimOverride>) 
   }
 }
 
-/** Real schedule for a period, in the same shape as a scenario. */
-export async function loadRealData(periodStart: Date, periodEnd: Date): Promise<SimData> {
-  const ref = await loadReference();
-  const shifts = await prisma.shift.findMany({
+function cloneReference(ref: Reference): Reference {
+  return { ...ref, employees: Object.fromEntries(Object.entries(ref.employees).map(([k, e]) => [k, { ...e, skills: { ...e.skills } }])) };
+}
+
+function realShiftsQuery(periodStart: Date, periodEnd: Date) {
+  return prisma.shift.findMany({
     where: { startAt: { lt: periodEnd }, endAt: { gt: periodStart } },
     include: { assignments: true },
     orderBy: { startAt: "asc" },
   });
+}
+
+function scenarioQuery(scenarioId: string) {
+  return prisma.scenario.findUnique({
+    where: { id: scenarioId },
+    include: { shifts: { include: { assignments: true }, orderBy: { startAt: "asc" } }, overrides: true },
+  });
+}
+
+type RealShiftRows = Awaited<ReturnType<typeof realShiftsQuery>>;
+type ScenarioRow = NonNullable<Awaited<ReturnType<typeof scenarioQuery>>>;
+
+function buildReal(ref: Reference, shifts: RealShiftRows, periodStart: Date, periodEnd: Date): SimData {
   return {
     ...ref,
+    settings: defaultSettings(),
     periodStart,
     periodEnd,
     overrides: {},
@@ -85,19 +101,14 @@ export async function loadRealData(periodStart: Date, periodEnd: Date): Promise<
   };
 }
 
-export async function loadScenarioData(scenarioId: string): Promise<SimData> {
-  const scenario = await prisma.scenario.findUnique({
-    where: { id: scenarioId },
-    include: { shifts: { include: { assignments: true }, orderBy: { startAt: "asc" } }, overrides: true },
-  });
-  if (!scenario) throw new SimError("Scenariu inexistent");
-  const ref = await loadReference();
+function buildScenario(ref: Reference, scenario: ScenarioRow): SimData {
   const overrides: Record<string, SimOverride> = Object.fromEntries(
     scenario.overrides.map((o) => [o.employeeId, { teamId: o.teamId, departmentId: o.departmentId, levelId: o.levelId }]),
   );
   applyOverrides(ref, overrides);
-  return {
+  const data: SimData = {
     ...ref,
+    settings: normalizeSettings(scenario.settings),
     periodStart: scenario.periodStart,
     periodEnd: scenario.periodEnd,
     overrides,
@@ -111,6 +122,29 @@ export async function loadScenarioData(scenarioId: string): Promise<SimData> {
       assignments: s.assignments.map((a) => ({ id: a.id, employeeId: a.employeeId, positionId: a.positionId, isLead: a.isLead })),
     })),
   };
+  applySettingsToData(data);
+  return data;
+}
+
+/** Real schedule for a period, in the same shape as a scenario. */
+export async function loadRealData(periodStart: Date, periodEnd: Date): Promise<SimData> {
+  const [ref, shifts] = await Promise.all([loadReference(), realShiftsQuery(periodStart, periodEnd)]);
+  return buildReal(ref, shifts, periodStart, periodEnd);
+}
+
+export async function loadScenarioData(scenarioId: string): Promise<SimData> {
+  const [scenario, ref] = await Promise.all([scenarioQuery(scenarioId), loadReference()]);
+  if (!scenario) throw new SimError("Scenariu inexistent");
+  return buildScenario(ref, scenario);
+}
+
+/** Scenario + the real schedule of the same period, loading the shared reference data only once. */
+export async function loadScenarioWithReal(scenarioId: string): Promise<{ scenario: SimData; real: SimData }> {
+  const meta = await prisma.scenario.findUnique({ where: { id: scenarioId }, select: { periodStart: true, periodEnd: true } });
+  if (!meta) throw new SimError("Scenariu inexistent");
+  const [scenario, ref, realShifts] = await Promise.all([scenarioQuery(scenarioId), loadReference(), realShiftsQuery(meta.periodStart, meta.periodEnd)]);
+  if (!scenario) throw new SimError("Scenariu inexistent");
+  return { real: buildReal(cloneReference(ref), realShifts, meta.periodStart, meta.periodEnd), scenario: buildScenario(ref, scenario) };
 }
 
 // ---------------------------------------------------------------------------
@@ -120,10 +154,12 @@ export async function loadScenarioData(scenarioId: string): Promise<SimData> {
 type Snapshot = {
   shifts: { id: string; sourceShiftId: string | null; departmentId: string; teamId: string | null; startAt: string; endAt: string; assignments: SimShift["assignments"] }[];
   overrides: Record<string, SimOverride>;
+  settings?: ScenarioSettings;
 };
 
+/** Deep, detached copy of the scenario state (later in-memory changes must not leak into it). */
 function snapshot(data: SimData): Snapshot {
-  return {
+  return structuredClone({
     shifts: data.shifts.map((s) => ({
       id: s.id,
       sourceShiftId: s.sourceShiftId ?? null,
@@ -134,7 +170,8 @@ function snapshot(data: SimData): Snapshot {
       assignments: s.assignments,
     })),
     overrides: data.overrides,
-  };
+    settings: data.settings,
+  });
 }
 
 async function writeSnapshot(scenarioId: string, snap: Snapshot) {
@@ -158,6 +195,7 @@ async function writeSnapshot(scenarioId: string, snap: Snapshot) {
         s.assignments.map((a) => ({ id: a.id, scenarioId, scenarioShiftId: s.id, employeeId: a.employeeId, positionId: a.positionId, isLead: a.isLead })),
       ),
     });
+    await tx.scenario.update({ where: { id: scenarioId }, data: { settings: (snap.settings ?? defaultSettings()) as object } });
     const ov = Object.entries(snap.overrides);
     if (ov.length) {
       await tx.scenarioEmployeeOverride.createMany({
@@ -189,9 +227,9 @@ export async function duplicateScenario(scenarioId: string, createdById: string,
   if (!src) throw new SimError("Scenariu inexistent");
   const data = await loadScenarioData(scenarioId);
   const copy = await prisma.scenario.create({
-    data: { name: name ?? `${src.name} (copie)`, createdById, periodStart: src.periodStart, periodEnd: src.periodEnd, notes: src.notes },
+    data: { name: name ?? `${src.name} (copie)`, createdById, periodStart: src.periodStart, periodEnd: src.periodEnd, notes: src.notes, settings: { ...data.settings, appliedAt: null } as object },
   });
-  const snap = snapshot(data);
+  const snap = { ...snapshot(data), settings: { ...data.settings, appliedAt: null } };
   for (const s of snap.shifts) {
     s.id = `ss_${globalThis.crypto.randomUUID()}`;
     s.assignments = s.assignments.map((a) => ({ ...a, id: `sa_${globalThis.crypto.randomUUID()}` }));
@@ -200,19 +238,37 @@ export async function duplicateScenario(scenarioId: string, createdById: string,
   return copy;
 }
 
-/** Validate + apply a change, record it in ScenarioChange (with an undo snapshot), persist. */
-export async function applyChange(scenarioId: string, rawChange: unknown): Promise<{ message: string; evaluation: Evaluation }> {
-  const parsed = changeSchema.safeParse(rawChange);
-  if (!parsed.success) throw new SimError(`Modificare invalidă: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
-  const change = parsed.data as Change;
+export function parseChange(raw: unknown): Change {
+  const parsed = changeSchema.safeParse(raw);
+  if (!parsed.success) throw new SimError(`Modificare invalidă: ${parsed.error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ")}`);
+  return parsed.data as Change;
+}
+
+/**
+ * Validate + apply one or more changes as a single step: one ScenarioChange record (with an undo snapshot),
+ * so a suggestion or a "what if" template is undone in one click. All-or-nothing.
+ */
+export async function applyChanges(scenarioId: string, rawChanges: unknown[], label?: string): Promise<{ message: string; messages: string[] }> {
+  const changes = rawChanges.map(parseChange);
+  if (!changes.length) throw new SimError("Nicio modificare");
   const data = await loadScenarioData(scenarioId);
   const before = snapshot(data);
-  const message = applyChangeToData(data, change);
+  const messages = changes.map((c) => applyChangeToData(data, c));
   await writeSnapshot(scenarioId, snapshot(data));
+  const message = label ? `${label}: ${messages.join(" · ")}` : messages.join(" · ");
   await prisma.scenarioChange.create({
-    data: { scenarioId, type: change.type, payload: { ...change, message } as object, inverse: before as unknown as object },
+    data: {
+      scenarioId,
+      type: changes.length === 1 ? changes[0].type : "BATCH",
+      payload: { changes, message } as object,
+      inverse: before as unknown as object,
+    },
   });
-  return { message, evaluation: evaluate(data) };
+  return { message, messages };
+}
+
+export async function applyChange(scenarioId: string, rawChange: unknown): Promise<{ message: string }> {
+  return applyChanges(scenarioId, [rawChange]);
 }
 
 export async function undoLastChange(scenarioId: string) {
@@ -228,18 +284,21 @@ export async function previewChanges(scenarioId: string, rawChanges: unknown[]) 
   const data = await loadScenarioData(scenarioId);
   const before = evaluate(data);
   const copy = cloneData(data);
-  const messages: string[] = [];
-  for (const raw of rawChanges) {
-    const parsed = changeSchema.safeParse(raw);
-    if (!parsed.success) throw new SimError(`Modificare invalidă: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
-    messages.push(applyChangeToData(copy, parsed.data as Change));
-  }
+  const messages = rawChanges.map((raw) => applyChangeToData(copy, parseChange(raw)));
   const after = evaluate(copy);
   return { messages, impact: compare(before, after) };
 }
 
 export async function evaluateScenario(scenarioId: string) {
   return evaluate(await loadScenarioData(scenarioId));
+}
+
+/** Evaluate several scenarios, loading the shared reference data once. */
+export async function evaluateScenarios(ids: string[]): Promise<Record<string, Evaluation>> {
+  const [ref, rows] = await Promise.all([loadReference(), Promise.all(ids.map((id) => scenarioQuery(id)))]);
+  const out: Record<string, Evaluation> = {};
+  for (const row of rows) if (row) out[row.id] = evaluate(buildScenario(cloneReference(ref), row));
+  return out;
 }
 
 export async function evaluateReal(periodStart: Date, periodEnd: Date) {
@@ -250,8 +309,14 @@ export async function evaluateReal(periodStart: Date, periodEnd: Date) {
 export async function compareScenarios(aId: string, b: string | "real"): Promise<{ a: Evaluation; b: Evaluation; diff: Comparison }> {
   const scenarioA = await prisma.scenario.findUnique({ where: { id: aId } });
   if (!scenarioA) throw new SimError("Scenariu inexistent");
-  const evA = await evaluateScenario(aId);
-  const evB = b === "real" ? await evaluateReal(scenarioA.periodStart, scenarioA.periodEnd) : await evaluateScenario(b);
+  let evA: Evaluation, evB: Evaluation;
+  if (b === "real") {
+    const both = await loadScenarioWithReal(aId);
+    evA = evaluate(both.scenario);
+    evB = evaluate(both.real);
+  } else {
+    [evA, evB] = await Promise.all([evaluateScenario(aId), evaluateScenario(b)]);
+  }
   // diff is expressed as "b -> a": how the scenario differs from the reference
   return { a: evA, b: evB, diff: compare(evB, evA) };
 }

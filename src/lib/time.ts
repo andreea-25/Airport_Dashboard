@@ -67,3 +67,24 @@ export function hoursBetween(a: Date, b: Date): number {
 export function dateOnly(dateStr: string): Date {
   return new Date(`${dateStr}T00:00:00.000Z`);
 }
+
+// ---------------------------------------------------------------------------
+// Fast cached local-time info (the simulation engine calls this thousands of times per evaluation;
+// shift boundaries fall on a small set of instants, so a cache makes it almost free).
+// ---------------------------------------------------------------------------
+export type LocalInfo = { hour: number; dow: number; date: string; monday: string; time: string };
+const infoCache = new Map<number, LocalInfo>();
+
+export function localInfo(d: Date | number): LocalInfo {
+  const ms = typeof d === "number" ? d : d.getTime();
+  let v = infoCache.get(ms);
+  if (!v) {
+    const date = new Date(ms);
+    const dow = localIsoDow(date);
+    const dateStr = localDateStr(date);
+    v = { hour: localHour(date), dow, date: dateStr, monday: addDaysStr(dateStr, -(dow - 1)), time: localTimeStr(date) };
+    if (infoCache.size > 50_000) infoCache.clear();
+    infoCache.set(ms, v);
+  }
+  return v;
+}

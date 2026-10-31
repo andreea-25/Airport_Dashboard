@@ -24,7 +24,8 @@ export async function createSession(s: Session) {
   (await cookies()).set(COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    // only over HTTPS; set COOKIE_SECURE=true when deployed behind HTTPS (keeps http://<ip>:3000 working on the LAN)
+    secure: process.env.COOKIE_SECURE === "true",
     path: "/",
     maxAge: MAX_AGE,
   });

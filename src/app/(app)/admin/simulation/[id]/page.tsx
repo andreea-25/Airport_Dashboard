@@ -2,8 +2,7 @@ import { notFound } from "next/navigation";
 import { requireAdminPage } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { fmt, localTimeStr } from "@/lib/time";
-import { getHistory, getSimView, getSuggestions } from "@/app/actions/simulation";
-import { loadScenarioData } from "@/lib/sim/scenario";
+import { getHistory, getSimPageData, getSuggestions } from "@/app/actions/simulation";
 import SimWorkspace from "@/components/sim/SimWorkspace";
 
 export default async function ScenarioPage({ params }: { params: Promise<{ id: string }> }) {
@@ -11,7 +10,7 @@ export default async function ScenarioPage({ params }: { params: Promise<{ id: s
   const { id } = await params;
   const scenario = await prisma.scenario.findUnique({ where: { id } });
   if (!scenario) notFound();
-  const [view, history, suggestions, data] = await Promise.all([getSimView(id), getHistory(id), getSuggestions(id), loadScenarioData(id)]);
+  const [{ view, data, calendar, settings }, history, suggestions] = await Promise.all([getSimPageData(id), getHistory(id), getSuggestions(id)]);
   const departments = Object.values(data.departments).sort((a, b) => a.name.localeCompare(b.name, "ro"));
   const startTimes: Record<string, string[]> = {};
   for (const s of data.shifts) {
@@ -29,8 +28,11 @@ export default async function ScenarioPage({ params }: { params: Promise<{ id: s
       departments={departments}
       teams={Object.values(data.teams).sort((a, b) => a.name.localeCompare(b.name))}
       employees={Object.values(data.employees).map((e) => ({ id: e.id, name: e.name, departmentId: e.departmentId, teamId: e.teamId, level: e.levelName })).sort((a, b) => a.name.localeCompare(b.name, "ro"))}
-      levels={Object.values(data.levels).sort((a, b) => a.rank - b.rank).map((l) => ({ id: l.id, name: l.name }))}
+      levels={Object.values(data.levels).sort((a, b) => a.rank - b.rank).map((l) => ({ id: l.id, name: l.name, rank: l.rank }))}
+      skills={Object.values(data.skills).sort((a, b) => a.name.localeCompare(b.name, "ro")).map((x) => ({ id: x.id, name: x.name, type: x.type }))}
       startTimes={startTimes}
+      calendar={calendar}
+      settings={settings}
     />
   );
 }

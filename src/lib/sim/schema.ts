@@ -25,4 +25,31 @@ export const changeSchema = z.discriminatedUnion("type", [
     endTime: time,
   }),
   z.object({ type: z.literal("SET_EMPLOYEE_LEVEL"), employeeId: z.string(), levelId: z.string() }),
+  z.object({ type: z.literal("SET_ASSIGNMENT"), assignmentId: z.string(), positionId: z.string().nullish(), isLead: z.boolean().optional() }),
+  z.object({
+    type: z.literal("SET_RULES"),
+    rules: z.object({
+      minRestHours: z.coerce.number().optional(),
+      maxWeeklyHours: z.coerce.number().optional(),
+      normalWeeklyHours: z.coerce.number().optional(),
+      leadMinRank: z.coerce.number().int().optional(),
+    }),
+  }),
+  z.object({
+    type: z.literal("ADJUST_STAFFING"),
+    departmentId: z.string().nullish(),
+    startHour: z.coerce.number().int(),
+    endHour: z.coerce.number().int(),
+    factor: z.coerce.number(),
+    label: z.string().max(200).optional(),
+  }),
+  z.object({ type: z.literal("REMOVE_STAFFING_ADJUSTMENT"), id: z.string() }),
+  z.object({
+    type: z.literal("ADD_ABSENCE"),
+    employeeId: z.string(),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    days: z.coerce.number().int().min(1).max(31).optional(),
+    reason: z.string().max(100).optional(),
+  }),
+  z.object({ type: z.literal("EXPIRE_SKILL"), skillId: z.string(), departmentId: z.string().nullish() }),
 ]);

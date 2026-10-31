@@ -4,19 +4,25 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { assertAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
-import { addDaysStr, localToUtc } from "@/lib/time";
+import { addDaysStr, dateOnly, localInfo, localToUtc } from "@/lib/time";
+import { ro } from "@/lib/i18n/ro";
+import { findImprovements, type Candidate } from "@/lib/sim/optimize";
+import { saveGreedySuggestion } from "@/lib/sim/suggestions";
 import {
   applyChange,
-  compareScenarios,
+  applyChanges,
+  loadScenarioData,
   createScenarioFromReal,
+  loadScenarioWithReal,
   duplicateScenario,
   previewChanges,
   skillGap,
   SimError,
   undoLastChange,
 } from "@/lib/sim/scenario";
-import type { Evaluation } from "@/lib/sim/types";
-import type { Comparison } from "@/lib/sim/evaluate";
+import type { Evaluation, ScenarioSettings, SimData } from "@/lib/sim/types";
+import { buildCalendar, type CalendarData } from "@/lib/sim/calendar";
+import { compare, evaluate, type Comparison } from "@/lib/sim/evaluate";
 
 /** What the simulation UI needs (the full hourly coverage array stays on the server). */
 export type SimView = {
@@ -31,13 +37,17 @@ function slim(ev: Evaluation) {
   return { ...rest, topHours: hours.slice(0, 15) };
 }
 
-export async function getSimView(scenarioId: string): Promise<SimView> {
+/** Everything the scenario page needs, from a single load of scenario + real data. */
+export async function getSimPageData(scenarioId: string): Promise<{ view: SimView; data: SimData; calendar: CalendarData; settings: ScenarioSettings }> {
   await assertAdmin();
-  const r = await compareScenarios(scenarioId, "real");
+  const { scenario, real } = await loadScenarioWithReal(scenarioId);
+  const a = evaluate(scenario);
+  const b = evaluate(real);
   return {
-    scenario: slim(r.a),
-    real: { summary: r.b.summary, coverageByDept: r.b.coverageByDept, coverageByHour: r.b.coverageByHour },
-    diff: r.diff,
+    view: { scenario: slim(a), real: { summary: b.summary, coverageByDept: b.coverageByDept, coverageByHour: b.coverageByHour }, diff: compare(b, a) },
+    data: scenario,
+    calendar: buildCalendar(scenario, a),
+    settings: scenario.settings,
   };
 }
 
@@ -94,23 +104,23 @@ export async function deleteScenario(id: string): Promise<R> {
   }
 }
 
-export async function applySimChange(scenarioId: string, change: unknown): Promise<R<{ message: string; view: SimView }>> {
+export async function applySimChange(scenarioId: string, change: unknown): Promise<R<{ message: string }>> {
   try {
     const s = await assertAdmin();
     const { message } = await applyChange(scenarioId, change);
     await audit(s.userId, "Scenario", scenarioId, "APPLY_CHANGE", change);
-    return { ok: true, message, view: await getSimView(scenarioId) };
+    return { ok: true, message };
   } catch (e) {
     return err(e);
   }
 }
 
-export async function undoSimChange(scenarioId: string): Promise<R<{ view: SimView }>> {
+export async function undoSimChange(scenarioId: string): Promise<R<{ message: string }>> {
   try {
     const s = await assertAdmin();
     const last = await undoLastChange(scenarioId);
     await audit(s.userId, "Scenario", scenarioId, "UNDO", { type: last.type });
-    return { ok: true, view: await getSimView(scenarioId) };
+    return { ok: true, message: `Anulat: ${(last.payload as { message?: string }).message ?? last.type}` };
   } catch (e) {
     return err(e);
   }
@@ -152,16 +162,16 @@ export async function getSuggestions(scenarioId: string) {
 }
 
 /** Apply every change of a suggestion through the simulation engine (which validates and recalculates). */
-export async function applySuggestion(suggestionId: string): Promise<R<{ view: SimView; messages: string[] }>> {
+export async function applySuggestion(suggestionId: string): Promise<R<{ messages: string[] }>> {
   try {
     const s = await assertAdmin();
     const sug = await prisma.scenarioSuggestion.findUniqueOrThrow({ where: { id: suggestionId } });
     if (sug.status !== "PENDING") throw new SimError("Sugestia a fost deja procesată");
     const messages: string[] = [];
-    for (const c of sug.changes as unknown[]) messages.push((await applyChange(sug.scenarioId, c)).message);
+    messages.push(...(await applyChanges(sug.scenarioId, sug.changes as unknown[], sug.source === "AI" ? "Sugestie AI" : "Sugestie optimizator")).messages);
     await prisma.scenarioSuggestion.update({ where: { id: suggestionId }, data: { status: "APPLIED" } });
     await audit(s.userId, "ScenarioSuggestion", suggestionId, "APPLY", { changes: sug.changes });
-    return { ok: true, messages, view: await getSimView(sug.scenarioId) };
+    return { ok: true, messages };
   } catch (e) {
     return err(e);
   }
@@ -173,6 +183,99 @@ export async function dismissSuggestion(suggestionId: string): Promise<R> {
     await prisma.scenarioSuggestion.update({ where: { id: suggestionId }, data: { status: "DISMISSED" } });
     await audit(s.userId, "ScenarioSuggestion", suggestionId, "DISMISS");
     return { ok: true };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+// ---------------------------------------------------------------- optimizer
+
+export async function findImprovementsAction(scenarioId: string, opts: { departmentId?: string | null; excludeEmployeeIds?: string[] } = {}): Promise<R<{ candidates: Candidate[]; score: number; evaluated: number }>> {
+  try {
+    await assertAdmin();
+    const data = await loadScenarioData(scenarioId);
+    const r = findImprovements(data, { limit: 10, departmentId: opts.departmentId || null, excludeEmployeeIds: opts.excludeEmployeeIds ?? [] });
+    return { ok: true, candidates: r.candidates, score: r.base.score.total, evaluated: r.evaluated };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Apply a batch of changes as one undoable step (optimizer candidate, what-if template, drag & drop…). */
+export async function applySimChanges(scenarioId: string, changes: unknown[], label?: string): Promise<R<{ message: string }>> {
+  try {
+    const s = await assertAdmin();
+    const r = await applyChanges(scenarioId, changes, label);
+    await audit(s.userId, "Scenario", scenarioId, "APPLY_CHANGES", { label, changes });
+    return { ok: true, message: r.message };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function autoOptimizeAction(scenarioId: string, steps = 5): Promise<R<{ message: string }>> {
+  try {
+    const s = await assertAdmin();
+    const sug = await saveGreedySuggestion(scenarioId, Math.min(10, Math.max(1, steps)));
+    await audit(s.userId, "Scenario", scenarioId, "AUTO_OPTIMIZE", { steps, suggestionId: sug?.id });
+    return { ok: true, message: sug ? "Optimizarea automată a fost salvată ca sugestie. Verific-o și aplic-o din panoul Sugestii." : "Optimizatorul nu a găsit îmbunătățiri." };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+// ---------------------------------------------------------------- apply to the real schedule
+
+/**
+ * Replace the real shifts/assignments of the scenario's period with the scenario's version.
+ * Employee attributes (team, level), hypotheses (absences, traffic, expired skills) and rules are NOT applied.
+ * Requires typing the scenario name; audited; affected employees are notified.
+ */
+export async function applyScenarioToReal(scenarioId: string, confirmName: string): Promise<R<{ message: string }>> {
+  try {
+    const s = await assertAdmin();
+    const scenario = await prisma.scenario.findUnique({ where: { id: scenarioId } });
+    if (!scenario) throw new SimError("Scenariu inexistent");
+    if (confirmName.trim() !== scenario.name.trim()) throw new SimError("Numele scenariului nu corespunde");
+    const data = await loadScenarioData(scenarioId);
+    const sourceIds = data.shifts.map((x) => x.sourceShiftId).filter((x): x is string => !!x);
+    const realBefore = await prisma.shift.findMany({ where: { id: { in: sourceIds } }, include: { assignments: true } });
+    const beforeKeys = new Set(realBefore.flatMap((sh) => sh.assignments.map((a) => `${a.employeeId}|${sh.startAt.toISOString()}|${sh.endAt.toISOString()}`)));
+    const realIds = new Set(realBefore.map((x) => x.id));
+    let updated = 0;
+    let created = 0;
+    await prisma.$transaction(
+      async (tx) => {
+        for (const sh of data.shifts) {
+          const values = { departmentId: sh.departmentId, teamId: sh.teamId, startAt: sh.startAt, endAt: sh.endAt, date: dateOnly(localInfo(sh.startAt).date) };
+          const assignments = sh.assignments.map((a) => ({ employeeId: a.employeeId, positionId: a.positionId, isLead: a.isLead }));
+          if (sh.sourceShiftId && realIds.has(sh.sourceShiftId)) {
+            await tx.shift.update({ where: { id: sh.sourceShiftId }, data: values });
+            await tx.shiftAssignment.deleteMany({ where: { shiftId: sh.sourceShiftId } });
+            if (assignments.length) await tx.shiftAssignment.createMany({ data: assignments.map((a) => ({ ...a, shiftId: sh.sourceShiftId! })) });
+            updated++;
+          } else {
+            await tx.shift.create({ data: { ...values, assignments: { create: assignments } } });
+            created++;
+          }
+        }
+        await tx.scenario.update({ where: { id: scenarioId }, data: { settings: { ...data.settings, appliedAt: new Date().toISOString() } as object } });
+      },
+      { timeout: 60_000 },
+    );
+    // notify employees whose schedule changed
+    const afterKeys = new Set(data.shifts.flatMap((sh) => sh.assignments.map((a) => `${a.employeeId}|${sh.startAt.toISOString()}|${sh.endAt.toISOString()}`)));
+    const changedEmps = new Set<string>();
+    for (const k of beforeKeys) if (!afterKeys.has(k)) changedEmps.add(k.split("|")[0]);
+    for (const k of afterKeys) if (!beforeKeys.has(k)) changedEmps.add(k.split("|")[0]);
+    const users = await prisma.user.findMany({ where: { employeeId: { in: [...changedEmps] } } });
+    if (users.length) {
+      await prisma.notification.createMany({ data: users.map((u) => ({ userId: u.id, type: "SCHEDULE_CHANGED", message: "Programul tău de ture a fost actualizat" })) });
+    }
+    await audit(s.userId, "Scenario", scenarioId, "APPLY_TO_REAL", { name: scenario.name, updatedShifts: updated, createdShifts: created, employeesAffected: changedEmps.size });
+    revalidatePath("/admin/shifts");
+    revalidatePath("/admin/today");
+    return { ok: true, message: `${ro.sim.applyReal.done} ${updated} ture actualizate, ${created} ture noi, ${changedEmps.size} angajați anunțați.` };
   } catch (e) {
     return err(e);
   }

@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { runAgent } from "@/lib/ai/agent";
 import { AiUnavailableError } from "@/lib/ai/ollama";
-import { ruleBasedSuggestions } from "@/lib/ai/rules";
+import { saveOptimizerSuggestions } from "@/lib/sim/suggestions";
 import { audit } from "@/lib/audit";
 import { ro } from "@/lib/i18n/ro";
 
@@ -40,8 +40,8 @@ export async function POST(req: Request) {
       console.error("[ai-sim]", e);
       return NextResponse.json({ error: ro.common.errorGeneric }, { status: 500 });
     }
-    const saved = await ruleBasedSuggestions(scenarioId);
-    await audit(session.userId, "Scenario", scenarioId, "RULES_SUGGEST", { created: saved.length, reason: e.message });
-    return NextResponse.json({ source: "RULES", conversationId, reply: ro.sim.rulesFallback, created: saved.length });
+    const saved = await saveOptimizerSuggestions(scenarioId, 3);
+    await audit(session.userId, "Scenario", scenarioId, "OPTIMIZER_SUGGEST", { created: saved, reason: e.message });
+    return NextResponse.json({ source: "OPTIMIZER", conversationId, reply: ro.sim.rulesFallback, created: saved });
   }
 }

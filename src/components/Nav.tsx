@@ -1,5 +1,5 @@
 "use client";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
 
@@ -24,7 +24,10 @@ export default function Nav({ sections }: { sections: { title: string; items: Na
                       active ? "bg-white/10 font-medium text-white" : "text-slate-300 hover:bg-white/5 hover:text-white",
                     )}
                   >
-                    <span>{it.label}</span>
+                    <span className="flex items-center gap-2">
+                      {it.label}
+                      <PendingDot />
+                    </span>
                     {!!it.badge && <span className="rounded-full bg-amber-400 px-1.5 text-[11px] font-semibold text-slate-900">{it.badge}</span>}
                   </Link>
                 </li>
@@ -35,4 +38,10 @@ export default function Nav({ sections }: { sections: { title: string; items: Na
       ))}
     </nav>
   );
+}
+
+/** Small pulsing dot next to a menu item while its page is loading (instant click feedback). */
+function PendingDot() {
+  const { pending } = useLinkStatus();
+  return <span aria-hidden className={clsx("h-1.5 w-1.5 rounded-full bg-amber-300 transition-opacity", pending ? "animate-pulse opacity-100" : "opacity-0")} />;
 }

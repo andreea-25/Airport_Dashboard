@@ -4,6 +4,8 @@ import { addDaysStr, fmt, localDateStr, localHour, localTimeStr, localToUtc } fr
 import { getMyCareerGap, getMyProfile, getMyRequests, getMyShifts, getShiftDetail } from "../services/employee";
 import { evaluate } from "../sim/evaluate";
 import { loadScenarioData, previewChanges, skillGap } from "../sim/scenario";
+import { findImprovements, type Candidate } from "../sim/optimize";
+import { applyChangeToData, cloneData } from "../sim/changes";
 import { changeSchema } from "../sim/schema";
 import type { ToolDef } from "./ollama";
 
@@ -12,7 +14,12 @@ import type { ToolDef } from "./ollama";
  * The model can only choose tool names and arguments; identity and scope are fixed here.
  */
 export type ToolContext = { session: Session; scenarioId?: string | null; conversationId: string };
-export type ToolResult = { result: unknown; pendingRequest?: { type: string; details: string; summary: string } };
+export type ToolResult = {
+  result: unknown;
+  pendingRequest?: { type: string; details: string; summary: string };
+  /** stored with the tool call but not sent to the model (e.g. full change lists of candidates) */
+  meta?: Record<string, unknown>;
+};
 type Exec = (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResult>;
 
 const fn = (name: string, description: string, properties: Record<string, unknown> = {}, required: string[] = []): ToolDef => ({
@@ -128,6 +135,15 @@ const changeItems = {
 };
 
 export const adminTools: ToolDef[] = [
+  fn(
+    "find_improvements",
+    "PRIMUL PAS pentru sugestii: optimizatorul încearcă sute de mutări mici pe scenariu și întoarce cele mai bune (C1, C2…), fiecare cu impactul calculat (scor, acoperire, încălcări). Poți exclude angajați sau limita la un departament.",
+    {
+      department_code: str("Opțional: doar un departament (SEC, RMP, CHK, BAG, PRM, GTE, OCC, MNT)"),
+      exclude_employee_names: { type: "array", items: { type: "string" }, description: "Opțional: nume (sau părți de nume) de angajați care NU trebuie mutați" },
+      limit: { type: "number", description: "Câte variante (implicit 8, maxim 10)" },
+    },
+  ),
   fn("get_scenario_summary", "Rezumatul scenariului curent: perioadă, departamente și echipe (cu ID-uri și orele turelor), indicatori, cele mai mari goluri de acoperire."),
   fn("evaluate_scenario", "Indicatorii detaliați ai scenariului curent: acoperire pe departament, încălcări de reguli, posturi fără skill, certificări care expiră."),
   fn("list_shifts", "Turele din scenariu pentru un departament (opțional o zi), cu ID-uri, oameni asignați și necesar.", {
@@ -140,10 +156,11 @@ export const adminTools: ToolDef[] = [
     target_department_code: str("Opțional: codul departamentului țintă"),
   }, ["employee_id"]),
   fn("preview_change", "Rulează motorul de simulare pe o copie temporară și returnează impactul. Nu salvează nimic.", { changes: changeItems }, ["changes"]),
-  fn("propose_changes", "Salvează o sugestie (listă de modificări + justificare) pe care adminul o poate aplica cu un click. Nu aplică nimic.", {
+  fn("propose_changes", "Salvează o sugestie pe care adminul o poate aplica cu un click. Nu aplică nimic. Cel mai simplu: dă candidate_ids din find_improvements (ex. [\"C1\",\"C3\"]); poți combina mai multe într-o singură sugestie. Alternativ, dă changes explicit.", {
+    candidate_ids: { type: "array", items: { type: "string" }, description: "ID-uri din ultimul find_improvements, ex. [\"C1\"]" },
     changes: changeItems,
     rationale: str("Justificare scurtă în română: ce rezolvă și de ce"),
-  }, ["changes", "rationale"]),
+  }, ["rationale"]),
 ];
 
 async function deptByCode(code: unknown) {
@@ -176,7 +193,47 @@ const impactOut = (impact: Awaited<ReturnType<typeof previewChanges>>["impact"])
   pe_departament: impact.byDept.filter((d) => d.delta !== 0).map((d) => ({ departament: d.name, inainte: d.a, dupa: d.b })),
 });
 
+/** Candidates returned by the last find_improvements call in this conversation. */
+async function lastCandidates(conversationId: string): Promise<Candidate[]> {
+  const msg = await prisma.aiMessage.findFirst({
+    where: { conversationId, role: "tool", toolCalls: { path: ["name"], equals: "find_improvements" } },
+    orderBy: { createdAt: "desc" },
+  });
+  return ((msg?.toolCalls as { meta?: { candidates?: Candidate[] } } | null)?.meta?.candidates ?? []) as Candidate[];
+}
+
 const adminExec: Record<string, Exec> = {
+  async find_improvements(args, ctx) {
+    const id = requireScenario(ctx);
+    const data = await loadScenarioData(id);
+    const departmentId = args.department_code ? (await deptByCode(args.department_code)).id : null;
+    const names = (Array.isArray(args.exclude_employee_names) ? args.exclude_employee_names : typeof args.exclude_employee_names === "string" ? [args.exclude_employee_names] : [])
+      .map((n) => String(n).toLowerCase().trim())
+      .filter(Boolean);
+    const norm = (x: string) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    const exclude = Object.values(data.employees).filter((e) => names.some((n) => norm(e.name).includes(norm(n)))).map((e) => e.id);
+    const limit = Math.min(10, Math.max(1, Number(args.limit) || 8));
+    const r = findImprovements(data, { limit, departmentId, excludeEmployeeIds: exclude });
+    return {
+      result: {
+        scor_actual: r.base.score.total,
+        componente_scor: r.base.score,
+        angajati_exclusi: exclude.map((e) => data.employees[e].name),
+        variante_evaluate: r.evaluated,
+        candidati: r.candidates.map((c) => ({
+          id: c.id,
+          tip: c.kind,
+          descriere: c.description,
+          scor: `${c.scoreBefore} → ${c.scoreAfter} (+${c.delta})`,
+          acoperire: `${c.impact.coverage[0]}% → ${c.impact.coverage[1]}%`,
+          intervale_sub_necesar: `${c.impact.understaffed[0]} → ${c.impact.understaffed[1]}`,
+          incalcari: `${c.impact.violations[0]} → ${c.impact.violations[1]}`,
+        })),
+        nota: r.candidates.length ? "Folosește propose_changes cu candidate_ids. Candidații sunt independenți; dacă îi combini, impactul total e verificat din nou la salvare." : "Optimizatorul nu a găsit îmbunătățiri.",
+      },
+      meta: { candidates: r.candidates },
+    };
+  },
   async get_scenario_summary(_a, ctx) {
     const id = requireScenario(ctx);
     const sc = await prisma.scenario.findUniqueOrThrow({ where: { id } });
@@ -272,13 +329,34 @@ const adminExec: Record<string, Exec> = {
   },
   async propose_changes(args, ctx) {
     const id = requireScenario(ctx);
-    const changes = parseChanges(args.changes);
-    if (!changes.length) throw new Error("Lista de modificări e goală");
+    const ids = (Array.isArray(args.candidate_ids) ? args.candidate_ids : typeof args.candidate_ids === "string" ? String(args.candidate_ids).split(/[,\s]+/) : []).map(String).filter(Boolean);
+    let changes = args.changes ? parseChanges(args.changes) : [];
+    const skipped: string[] = [];
+    if (ids.length) {
+      const cands = await lastCandidates(ctx.conversationId);
+      // combine candidates one by one on a copy; skip any that conflicts with the ones already taken
+      const work = cloneData(await loadScenarioData(id));
+      for (const c of changes) applyChangeToData(work, c);
+      for (const cid of ids) {
+        const c = cands.find((x) => x.id.toUpperCase() === cid.toUpperCase());
+        if (!c) throw new Error(`Candidatul ${cid} nu există. Rulează find_improvements și folosește ID-urile primite.`);
+        const trial = cloneData(work);
+        try {
+          for (const ch of c.changes) applyChangeToData(trial, ch);
+        } catch (e) {
+          skipped.push(`${cid} (${(e as Error).message})`);
+          continue;
+        }
+        for (const ch of c.changes) applyChangeToData(work, ch);
+        changes = [...changes, ...c.changes];
+      }
+    }
+    if (!changes.length) throw new Error("Lista de modificări e goală: dă candidate_ids sau changes");
     const r = await previewChanges(id, changes); // validates against the engine before saving
     const sug = await prisma.scenarioSuggestion.create({
       data: { scenarioId: id, source: "AI", changes: changes as object, rationale: String(args.rationale ?? "").slice(0, 2000), estimatedImpact: { messages: r.messages, ...r.impact } as object },
     });
-    return { result: { salvat: true, suggestionId: sug.id, modificari: r.messages, impact: impactOut(r.impact) } };
+    return { result: { salvat: true, suggestionId: sug.id, modificari: r.messages, impact: impactOut(r.impact), ...(skipped.length ? { candidati_omisi_conflict: skipped } : {}) } };
   },
 };
 

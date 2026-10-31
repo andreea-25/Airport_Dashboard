@@ -6,6 +6,7 @@ import { ro } from "@/lib/i18n/ro";
 
 type Key = keyof SimView["real"]["summary"];
 const KPIS: { key: Key; label: string; higherIsBetter: boolean; suffix?: string }[] = [
+  { key: "score", label: ro.sim.score, higherIsBetter: true },
   { key: "avgCoverage", label: ro.sim.avgCoverage, higherIsBetter: true, suffix: "%" },
   { key: "understaffedSlots", label: ro.sim.understaffed, higherIsBetter: false },
   { key: "totalHours", label: ro.sim.totalHours, higherIsBetter: false },
@@ -17,7 +18,7 @@ const KPIS: { key: Key; label: string; higherIsBetter: boolean; suffix?: string 
 
 export function KpiRow({ view, refLabel = ro.sim.vsReal }: { view: SimView; refLabel?: string }) {
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
       {KPIS.map((k) => {
         const d = view.diff.summary[k.key];
         const delta = d.delta;
@@ -29,6 +30,13 @@ export function KpiRow({ view, refLabel = ro.sim.vsReal }: { view: SimView; refL
               {d.b}
               {k.suffix}
             </div>
+            {k.key === "score" && (
+              <div className="mb-0.5 flex flex-wrap gap-x-2 text-[10px] leading-tight tabular-nums text-slate-500" title={ro.sim.scoreHelp}>
+                {(Object.keys(ro.sim.scoreParts) as (keyof typeof ro.sim.scoreParts)[]).map((part) => (
+                  <span key={part}>{ro.sim.scoreParts[part]} {Math.round(view.scenario.score[part])}</span>
+                ))}
+              </div>
+            )}
             <div className={clsx("text-xs tabular-nums", good === null ? "text-slate-400" : good ? "text-emerald-700" : "text-red-700")}>
               {delta === 0 ? "=" : `${good ? "▲" : "▼"} ${delta > 0 ? "+" : ""}${delta}${k.suffix ?? ""}`} <span className="text-slate-400">{refLabel}</span>
             </div>
@@ -53,8 +61,8 @@ export function DeptCoverageChart({ view, refName = ro.sim.real, scnName = "Scen
           <YAxis domain={[50, 100]} tick={{ fontSize: 11, fill: "#64748b" }} tickLine={false} axisLine={false} unit="%" />
           <Tooltip formatter={(v) => `${v}%`} cursor={{ fill: "#f1f5f9" }} />
           <Legend verticalAlign="top" height={28} iconType="square" wrapperStyle={{ fontSize: 12 }} />
-          <Bar dataKey={refName} fill={REF_COLOR} radius={[4, 4, 0, 0]} maxBarSize={22} />
-          <Bar dataKey={scnName} fill={SCN_COLOR} radius={[4, 4, 0, 0]} maxBarSize={22} />
+          <Bar dataKey={refName} fill={REF_COLOR} radius={[4, 4, 0, 0]} maxBarSize={22} isAnimationActive={false} />
+          <Bar dataKey={scnName} fill={SCN_COLOR} radius={[4, 4, 0, 0]} maxBarSize={22} isAnimationActive={false} />
         </BarChart>
       </ResponsiveContainer>
     </div>

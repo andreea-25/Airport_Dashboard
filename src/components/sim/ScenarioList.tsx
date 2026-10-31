@@ -5,7 +5,7 @@ import Link from "next/link";
 import { createScenario, deleteScenario, duplicateScenarioAction } from "@/app/actions/simulation";
 import { ro } from "@/lib/i18n/ro";
 
-type Row = { id: string; name: string; period: string; changes: number; avgCoverage: number; violations: number; notes: string | null };
+type Row = { id: string; name: string; period: string; changes: number; avgCoverage: number; violations: number; score: number; notes: string | null };
 
 export default function ScenarioList({ rows, defaultStart }: { rows: Row[]; defaultStart: string }) {
   const router = useRouter();
@@ -24,6 +24,10 @@ export default function ScenarioList({ rows, defaultStart }: { rows: Row[]; defa
               <Link href={`/admin/simulation/${r.id}`} className="text-base font-semibold text-brand-700 hover:underline">{r.name}</Link>
               <div className="text-sm text-slate-500">{r.period} · {r.changes} {ro.sim.changes.toLowerCase()}</div>
               {r.notes && <div className="mt-1 text-xs text-slate-500">{r.notes}</div>}
+            </div>
+            <div className="flex h-12 w-14 flex-col items-center justify-center rounded-lg bg-slate-900 text-white" title={ro.sim.scoreHelp}>
+              <span className="text-lg font-semibold leading-none tabular-nums">{r.score.toFixed(0)}</span>
+              <span className="text-[9px] uppercase tracking-wide text-slate-300">scor</span>
             </div>
             <div className="text-right text-sm">
               <div><b className="tabular-nums">{r.avgCoverage}%</b> <span className="text-slate-500">{ro.sim.avgCoverage.toLowerCase()}</span></div>

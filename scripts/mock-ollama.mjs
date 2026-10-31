@@ -22,18 +22,19 @@ http
       const last = messages[messages.length - 1] ?? {};
       const admin = messages[0]?.content?.includes("ADMINISTRATOR");
       if (last.role === "tool") {
-        if (admin && last.tool_name === "get_scenario_summary") {
+        if (admin && last.tool_name === "find_improvements") {
           const data = JSON.parse(last.content);
-          const sec = data.departamente.find((d) => d.cod === "SEC");
-          return reply(res, call("propose_changes", {
-            changes: [{ type: "CHANGE_SHIFT_HOURS", departmentId: sec.departmentId, fromStart: "06:00", startTime: "05:00", endTime: "13:00" }],
-            rationale: "Securitatea are goluri la 05:00–06:00; mut tura de dimineață cu o oră mai devreme.",
-          }));
+          const ids = (data.candidati ?? []).slice(0, 2).map((c) => c.id);
+          if (!ids.length) return reply(res, { role: "assistant", content: "[mock] Optimizatorul nu a găsit îmbunătățiri." });
+          return reply(res, call("propose_changes", { candidate_ids: ids, rationale: `[mock] Combin ${ids.join(" și ")}: cele mai bune variante găsite de optimizator.` }));
         }
         return reply(res, { role: "assistant", content: `[mock] Am primit datele de la ${last.tool_name}:\n${last.content.slice(0, 400)}` });
       }
       const t = (last.content ?? "").toLowerCase();
-      if (admin) return reply(res, call("get_scenario_summary"));
+      if (admin) {
+        const m = (last.content ?? "").match(/nu[- ]?l muta pe (\p{L}+)/iu);
+        return reply(res, call("find_improvements", m ? { exclude_employee_names: [m[1]] } : {}));
+      }
       if (t.includes("senior") || t.includes("lipsește")) return reply(res, call("get_my_career_gap", {}));
       if (t.includes("avsec") || t.includes("cer ")) return reply(res, call("create_request", { type: "CAREER_INFO", details: "Informații despre următorul curs AVSEC", summary: "Cerere informații curs AVSEC" }));
       if (t.includes("cine")) return reply(res, call("get_my_shifts", {}));

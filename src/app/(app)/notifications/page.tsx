@@ -9,7 +9,7 @@ export default async function NotificationsPage() {
   const s = await requireSession();
   const list = await prisma.notification.findMany({ where: { userId: s.userId }, orderBy: { createdAt: "desc" }, take: 100 });
   const href = (n: (typeof list)[number]) =>
-    n.type === "NEW_REQUEST" ? "/admin/requests" : n.type === "REQUEST_STATUS" ? "/requests" : n.refId ? `/shifts/${n.refId}` : "#";
+    n.type === "NEW_REQUEST" ? "/admin/requests" : n.type === "REQUEST_STATUS" ? "/requests" : n.type === "SCHEDULE_CHANGED" ? "/shifts" : n.refId ? `/shifts/${n.refId}` : "#";
   return (
     <div className="mx-auto max-w-3xl space-y-4">
       <div className="flex items-center justify-between">

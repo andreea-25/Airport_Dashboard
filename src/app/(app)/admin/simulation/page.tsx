@@ -2,15 +2,15 @@ import { requireAdminPage } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { ro } from "@/lib/i18n/ro";
 import { addDaysStr, fmt, mondayOf } from "@/lib/time";
-import { evaluateScenario } from "@/lib/sim/scenario";
+import { evaluateScenarios } from "@/lib/sim/scenario";
 import ScenarioList from "@/components/sim/ScenarioList";
 
 export default async function SimulationPage() {
   await requireAdminPage();
   const scenarios = await prisma.scenario.findMany({ orderBy: { createdAt: "desc" }, include: { _count: { select: { changes: true } } } });
-  const rows = await Promise.all(
-    scenarios.map(async (s) => {
-      const ev = await evaluateScenario(s.id);
+  const evals = await evaluateScenarios(scenarios.map((s) => s.id));
+  const rows = scenarios.map((s) => {
+      const ev = evals[s.id];
       return {
         id: s.id,
         name: s.name,
@@ -18,10 +18,10 @@ export default async function SimulationPage() {
         period: `${fmt(s.periodStart, "dd.MM")} – ${fmt(new Date(s.periodEnd.getTime() - 1), "dd.MM.yyyy")}`,
         changes: s._count.changes,
         avgCoverage: ev.summary.avgCoverage,
+        score: ev.summary.score,
         violations: ev.summary.violationCount,
       };
-    }),
-  );
+    });
   return (
     <div className="space-y-5">
       <div>

@@ -275,6 +275,8 @@ model Scenario {
   periodEnd      DateTime
   baseSnapshotAt DateTime                   @default(now())
   notes          String?
+  /// rules, staffing adjustments, absences, expired skills (see src/lib/sim/types.ts ScenarioSettings)
+  settings       Json?
   createdAt      DateTime                   @default(now())
   shifts         ScenarioShift[]
   assignments    ScenarioAssignment[]

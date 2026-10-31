@@ -24,10 +24,19 @@ Rol curent: ANGAJAT (${who}). Toate uneltele întorc doar datele acestui utiliza
   }
   return `${common}
 Rol curent: ADMINISTRATOR, în modul de SIMULARE. Lucrezi pe o copie (scenariu); programul real nu e atins.
-Pași recomandați: 1) get_scenario_summary; 2) list_shifts / list_employees pentru ID-uri; 3) preview_change pentru a verifica impactul; 4) propose_changes cu 1–3 sugestii concrete și o justificare.
-- Folosește exact ID-urile primite de la unelte.
-- O sugestie bună crește acoperirea sau reduce încălcările fără să creeze altele noi (repaus 12h, maxim 48h/săptămână, lider ≥ Senior, certificări valide).
-- După propose_changes, explică pe scurt fiecare sugestie și impactul ei calculat de motor.`;
+Rolul tău: ești analistul. Un optimizator (cod) caută variantele și calculează impactul; tu alegi, combini și explici.
+Pași:
+1) find_improvements (cu department_code dacă adminul se referă la un departament, cu exclude_employee_names dacă adminul nu vrea să fie mutat cineva).
+2) Alege 1–3 candidați care se completează (ex. unul pentru acoperire, unul pentru lider lipsă). Evită doi candidați care mută aceeași persoană.
+3) propose_changes cu candidate_ids și o justificare scurtă.
+4) Răspunde adminului: pentru fiecare sugestie, ce schimbă, de ce, și impactul (scor, acoperire, încălcări) exact cum l-au dat uneltele.
+Dacă adminul refuză o variantă („nu vreau să-l mut pe X”), rulează din nou find_improvements cu exclude_employee_names=["X"].
+Pentru întrebări despre scenariu fără cerere de sugestii, folosește get_scenario_summary / evaluate_scenario.
+
+Exemplu:
+Admin: „Rezolvă golurile de la securitate, dar nu-l muta pe Popescu.”
+Tu: apelezi find_improvements {"department_code":"SEC","exclude_employee_names":["Popescu"]}, apoi propose_changes {"candidate_ids":["C1","C3"],"rationale":"..."}, apoi răspunzi:
+„Am salvat 1 sugestie (2 modificări): (1) C1 – Ana Marin intră în tura de marți 14–22, unde lipsea un om; (2) C3 – … Scorul crește de la 53,0 la 54,1, intervalele sub necesar scad de la 150 la 146. Popescu nu a fost mutat. O poți aplica din panoul Sugestii.”`;
 }
 
 export type AgentResult = {
@@ -101,9 +110,10 @@ export async function runAgent(opts: { session: Session; conversationId: string;
         try {
           const r = await fnExec(args, ctx);
           content = JSON.stringify(r.result);
+          if (r.meta) extra = { ...extra, meta: r.meta };
           if (r.pendingRequest) {
             pending = r.pendingRequest;
-            extra = { draft: r.pendingRequest, status: "PENDING" };
+            extra = { ...extra, draft: r.pendingRequest, status: "PENDING" };
           }
         } catch (e) {
           ok = false;

@@ -3,19 +3,21 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "setup": "node scripts/setup.mjs",
+    "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
+    "local": "node scripts/local.mjs",
+    "local:prod": "node scripts/local.mjs --prod",
+    "local:db": "node scripts/local.mjs --db-only",
+    "local:reset": "node scripts/local.mjs --reset",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
     "db:reset": "prisma migrate reset --force",
     "typecheck": "tsc --noEmit",
     "postinstall": "prisma generate",
-    "mock:ollama": "node scripts/mock-ollama.mjs",
-    "local": "node scripts/local.mjs",
-    "local:db": "node scripts/local.mjs --db-only",
-    "local:reset": "node scripts/local.mjs --reset"
+    "mock:ollama": "node scripts/mock-ollama.mjs"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.1",

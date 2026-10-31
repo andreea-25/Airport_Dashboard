@@ -1,35 +1,71 @@
-import { hoursBetween, localHour, localIsoDow, mondayOf } from "../time";
-import type { CoverageSlot, Evaluation, SimData, Violation } from "./types";
+import { localInfo } from "../time";
+import { DEFAULT_RULES, type CoverageSlot, type Evaluation, type ScoreBreakdown, type SimData, type Violation } from "./types";
 
-export const RULES = {
-  minRestHours: 12,
-  maxWeeklyHours: 48,
-  normalWeeklyHours: 40,
-  leadMinRank: 3, // Senior
-};
+/** Default rules (kept for backwards compatibility; scenarios carry their own copy in settings.rules). */
+export const RULES = DEFAULT_RULES;
 
 const HOUR = 3_600_000;
 
-function requiredFor(data: SimData, departmentId: string, dow: number, hour: number): number {
+/** Score weights: how much each family of indicators counts in the 0–100 scenario score. */
+export const SCORE_WEIGHTS = { coverage: 0.45, violations: 0.25, overtime: 0.15, certifications: 0.15 };
+
+/**
+ * One number to rank scenarios and candidate changes. Each component is 0–100 (higher = better)
+ * and decays smoothly, so every single improvement is visible to the optimizer.
+ */
+export function computeScore(s: { avgCoverage: number; violationCount: number; totalOvertime: number; mismatchCount: number; expiringCount: number }): ScoreBreakdown {
+  const coverage = s.avgCoverage;
+  const violations = 100 * Math.exp(-s.violationCount / 15);
+  const overtime = 100 * Math.exp(-s.totalOvertime / 80);
+  const certifications = 100 * Math.exp(-(s.mismatchCount + 0.5 * s.expiringCount) / 12);
+  const total =
+    SCORE_WEIGHTS.coverage * coverage +
+    SCORE_WEIGHTS.violations * violations +
+    SCORE_WEIGHTS.overtime * overtime +
+    SCORE_WEIGHTS.certifications * certifications;
+  const r = (x: number) => Math.round(x * 10) / 10;
+  return { total: Math.round(total * 100) / 100, coverage: r(coverage), violations: r(violations), overtime: r(overtime), certifications: r(certifications) };
+}
+
+/** Staffing need for a department at a local day/hour, including the scenario's adjustments. */
+export function requiredFor(data: SimData, departmentId: string, dow: number, hour: number): number {
+  let base = 0;
   for (const s of data.staffing) {
-    if (s.departmentId === departmentId && s.dayOfWeek === dow && hour >= s.startHour && hour < s.endHour) return s.minStaff;
+    if (s.departmentId === departmentId && s.dayOfWeek === dow && hour >= s.startHour && hour < s.endHour) {
+      base = s.minStaff;
+      break;
+    }
   }
-  return 0;
+  if (!base) return 0;
+  let factor = 1;
+  for (const a of data.settings.staffingAdjustments) {
+    if ((!a.departmentId || a.departmentId === departmentId) && hour >= a.startHour && hour < a.endHour) factor *= a.factor;
+  }
+  return factor === 1 ? base : Math.max(1, Math.ceil(base * factor - 1e-9));
+}
+
+/** Hours of a shift that fall in the night window 22:00–06:00. */
+function nightHours(start: number, end: number) {
+  let n = 0;
+  for (let t = start; t < end; t += HOUR) {
+    const h = localInfo(t).hour;
+    if (h >= 22 || h < 6) n++;
+  }
+  return n;
 }
 
 /** Deterministic evaluation of a set of shifts. No AI involved. */
 export function evaluate(data: SimData): Evaluation {
+  const rules = data.settings.rules;
   const coverage: CoverageSlot[] = [];
   const shiftsByDept: Record<string, typeof data.shifts> = {};
   for (const s of data.shifts) (shiftsByDept[s.departmentId] ??= []).push(s);
 
   // ---- coverage per department per local hour ----
   const deptIds = Object.keys(data.departments);
+  const byHourAcc: Record<string, { sum: number; n: number; min: number }> = {};
   for (let t = data.periodStart.getTime(); t < data.periodEnd.getTime(); t += HOUR) {
-    const slotStart = new Date(t);
-    const slotEnd = new Date(t + HOUR);
-    const dow = localIsoDow(slotStart);
-    const hour = localHour(slotStart);
+    const { dow, hour } = localInfo(t);
     for (const deptId of deptIds) {
       const required = requiredFor(data, deptId, dow, hour);
       if (required === 0) continue;
@@ -38,14 +74,12 @@ export function evaluate(data: SimData): Evaluation {
         if (s.startAt.getTime() <= t && s.endAt.getTime() >= t + HOUR) for (const a of s.assignments) people.add(a.employeeId);
       }
       const assigned = people.size;
-      coverage.push({
-        departmentId: deptId,
-        slotStart: slotStart.toISOString(),
-        slotEnd: slotEnd.toISOString(),
-        required,
-        assigned,
-        pct: Math.round((assigned / required) * 100),
-      });
+      const pct = Math.round((assigned / required) * 100);
+      coverage.push({ departmentId: deptId, slotStart: new Date(t).toISOString(), slotEnd: new Date(t + HOUR).toISOString(), required, assigned, pct });
+      const e = (byHourAcc[`${deptId}|${hour}`] ??= { sum: 0, n: 0, min: Infinity });
+      e.sum += Math.min(pct, 100);
+      e.n++;
+      e.min = Math.min(e.min, pct);
     }
   }
 
@@ -60,60 +94,62 @@ export function evaluate(data: SimData): Evaluation {
       totalSlots: slots.length,
     };
   });
-
-  const byHour: Record<string, { sum: number; n: number; min: number }> = {};
-  for (const c of coverage) {
-    const key = `${c.departmentId}|${localHour(new Date(c.slotStart))}`;
-    const e = (byHour[key] ??= { sum: 0, n: 0, min: Infinity });
-    e.sum += Math.min(c.pct, 100);
-    e.n++;
-    e.min = Math.min(e.min, c.pct);
-  }
-  const coverageByHour = Object.entries(byHour).map(([k, v]) => {
+  const coverageByHour = Object.entries(byHourAcc).map(([k, v]) => {
     const [departmentId, hour] = k.split("|");
     return { departmentId, hour: Number(hour), avgPct: Math.round(v.sum / v.n), minPct: v.min };
   });
 
-  // ---- per employee: hours, rest, overlap ----
+  // ---- per employee: hours, rest, overlap, fairness ----
   const violations: Violation[] = [];
-  const empShifts: Record<string, { shiftId: string; startAt: Date; endAt: Date }[]> = {};
+  const absent = new Set(data.settings.absences.map((a) => `${a.employeeId}|${a.date}`));
+  const empShifts: Record<string, { shiftId: string; start: number; end: number }[]> = {};
   for (const s of data.shifts) {
-    for (const a of s.assignments) (empShifts[a.employeeId] ??= []).push({ shiftId: s.id, startAt: s.startAt, endAt: s.endAt });
+    for (const a of s.assignments) (empShifts[a.employeeId] ??= []).push({ shiftId: s.id, start: s.startAt.getTime(), end: s.endAt.getTime() });
   }
   const hours: Evaluation["hours"] = [];
+  const perEmployee: Evaluation["fairness"]["perEmployee"] = [];
   for (const [empId, list] of Object.entries(empShifts)) {
     const emp = data.employees[empId];
     const name = emp?.name ?? empId;
-    list.sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
+    list.sort((a, b) => a.start - b.start);
     let total = 0;
+    let nights = 0;
+    let weekends = 0;
     const weekly: Record<string, number> = {};
     for (let i = 0; i < list.length; i++) {
-      const h = hoursBetween(list[i].startAt, list[i].endAt);
+      const sh = list[i];
+      const h = (sh.end - sh.start) / HOUR;
+      const info = localInfo(sh.start);
       total += h;
-      const wk = mondayOf(list[i].startAt);
-      weekly[wk] = (weekly[wk] ?? 0) + h;
+      weekly[info.monday] = (weekly[info.monday] ?? 0) + h;
+      if (nightHours(sh.start, sh.end) >= 3) nights++;
+      if (info.dow >= 6) weekends++;
+      if (absent.has(`${empId}|${info.date}`)) {
+        violations.push({ type: "ABSENT_ASSIGNED", employeeId: empId, shiftId: sh.shiftId, message: `${name}: programat(ă) pe ${info.date}, dar e absent(ă)` });
+      }
       if (i > 0) {
-        const gap = hoursBetween(list[i - 1].endAt, list[i].startAt);
+        const gap = (sh.start - list[i - 1].end) / HOUR;
         if (gap < 0) {
-          violations.push({ type: "OVERLAP", employeeId: empId, shiftId: list[i].shiftId, message: `${name}: două ture suprapuse` });
-        } else if (gap < RULES.minRestHours) {
+          violations.push({ type: "OVERLAP", employeeId: empId, shiftId: sh.shiftId, message: `${name}: două ture suprapuse` });
+        } else if (gap < rules.minRestHours) {
           violations.push({
             type: "REST_TOO_SHORT",
             employeeId: empId,
-            shiftId: list[i].shiftId,
-            message: `${name}: doar ${Math.round(gap * 10) / 10}h repaus între ture (minim ${RULES.minRestHours}h)`,
+            shiftId: sh.shiftId,
+            message: `${name}: doar ${Math.round(gap * 10) / 10}h repaus între ture (minim ${rules.minRestHours}h)`,
           });
         }
       }
     }
     let overtime = 0;
     for (const [wk, h] of Object.entries(weekly)) {
-      overtime += Math.max(0, h - RULES.normalWeeklyHours);
-      if (h > RULES.maxWeeklyHours) {
-        violations.push({ type: "WEEKLY_HOURS", employeeId: empId, message: `${name}: ${Math.round(h)}h în săptămâna ${wk} (maxim ${RULES.maxWeeklyHours}h)` });
+      overtime += Math.max(0, h - rules.normalWeeklyHours);
+      if (h > rules.maxWeeklyHours) {
+        violations.push({ type: "WEEKLY_HOURS", employeeId: empId, message: `${name}: ${Math.round(h)}h în săptămâna ${wk} (maxim ${rules.maxWeeklyHours}h)` });
       }
     }
     hours.push({ employeeId: empId, name, total: Math.round(total * 10) / 10, overtime: Math.round(overtime * 10) / 10 });
+    if (emp) perEmployee.push({ employeeId: empId, name, departmentId: emp.departmentId, hours: Math.round(total), nights, weekends });
   }
   hours.sort((a, b) => b.total - a.total);
 
@@ -124,7 +160,7 @@ export function evaluate(data: SimData): Evaluation {
     for (const a of s.assignments) {
       const emp = data.employees[a.employeeId];
       if (!emp) continue;
-      if (emp.levelRank >= RULES.leadMinRank) hasLead = true;
+      if (emp.levelRank >= rules.leadMinRank) hasLead = true;
       if (!a.positionId) continue;
       const pos = data.positions[a.positionId];
       if (!pos) continue;
@@ -152,19 +188,19 @@ export function evaluate(data: SimData): Evaluation {
       }
     }
     if (!hasLead && s.assignments.length > 0) {
+      const lvl = Object.values(data.levels).find((l) => l.rank === rules.leadMinRank)?.name ?? "Senior";
       violations.push({
         type: "NO_LEAD",
         shiftId: s.id,
         departmentId: s.departmentId,
-        message: `${data.departments[s.departmentId]?.name ?? ""}: tură fără lider (nivel ≥ Senior)`,
+        message: `${data.departments[s.departmentId]?.name ?? ""}: tură fără lider (nivel ≥ ${lvl})`,
       });
     }
   }
 
   // ---- certifications expiring in the period (for people working in it) ----
   const expiringCertifications: Evaluation["expiringCertifications"] = [];
-  const working = new Set(Object.keys(empShifts));
-  for (const empId of working) {
+  for (const empId of Object.keys(empShifts)) {
     const emp = data.employees[empId];
     if (!emp) continue;
     for (const [skillId, sk] of Object.entries(emp.skills)) {
@@ -183,10 +219,35 @@ export function evaluate(data: SimData): Evaluation {
   }
   expiringCertifications.sort((a, b) => a.expiresAt.localeCompare(b.expiresAt));
 
-  const capped = coverage.map((c) => Math.min(c.pct, 100));
-  const summary = {
-    avgCoverage: capped.length ? Math.round((capped.reduce((a, b) => a + b, 0) / capped.length) * 10) / 10 : 100,
-    understaffedSlots: coverage.filter((c) => c.assigned < c.required).length,
+  // ---- fairness by department ----
+  const byDept = deptIds
+    .map((id) => {
+      const list = perEmployee.filter((p) => p.departmentId === id);
+      if (!list.length) return null;
+      const avg = (k: "nights" | "weekends") => Math.round((list.reduce((a, p) => a + p[k], 0) / list.length) * 10) / 10;
+      const hrs = list.map((p) => p.hours);
+      return {
+        departmentId: id,
+        name: data.departments[id].name,
+        people: list.length,
+        avgNights: avg("nights"),
+        maxNights: Math.max(...list.map((p) => p.nights)),
+        avgWeekends: avg("weekends"),
+        maxWeekends: Math.max(...list.map((p) => p.weekends)),
+        hoursSpread: Math.max(...hrs) - Math.min(...hrs),
+      };
+    })
+    .filter((x): x is NonNullable<typeof x> => !!x);
+
+  let capSum = 0;
+  let under = 0;
+  for (const c of coverage) {
+    capSum += Math.min(c.pct, 100);
+    if (c.assigned < c.required) under++;
+  }
+  const base = {
+    avgCoverage: coverage.length ? Math.round((capSum / coverage.length) * 10) / 10 : 100,
+    understaffedSlots: under,
     totalHours: Math.round(hours.reduce((a, h) => a + h.total, 0)),
     totalOvertime: Math.round(hours.reduce((a, h) => a + h.overtime, 0) * 10) / 10,
     violationCount: violations.length,
@@ -194,8 +255,22 @@ export function evaluate(data: SimData): Evaluation {
     expiringCount: expiringCertifications.length,
     shiftCount: data.shifts.length,
   };
+  // the score uses the unrounded coverage so tiny improvements still count
+  const score = computeScore({ ...base, avgCoverage: coverage.length ? capSum / coverage.length : 100 });
+  const summary = { score: Math.round(score.total * 10) / 10, ...base };
 
-  return { coverage, coverageByDept, coverageByHour, hours, violations, skillMismatches, expiringCertifications, summary };
+  return {
+    coverage,
+    coverageByDept,
+    coverageByHour,
+    hours,
+    violations,
+    skillMismatches,
+    expiringCertifications,
+    fairness: { perEmployee: perEmployee.sort((a, b) => b.nights - a.nights || b.weekends - a.weekends), byDept },
+    score,
+    summary,
+  };
 }
 
 export type Comparison = {
