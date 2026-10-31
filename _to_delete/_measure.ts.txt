@@ -1,6 +1,0 @@
-import { toolsFor } from "./src/lib/ai/tools";
-import { systemPrompt } from "./src/lib/ai/agent";
-for (const m of ["EMPLOYEE","ADMIN_SIM"] as const) {
-  const t = JSON.stringify(toolsFor(m).defs).length, s = systemPrompt(m, "Test User").length;
-  console.log(m, "tools chars", t, "system chars", s, "≈tokens", Math.round((t+s)/3));
-}
