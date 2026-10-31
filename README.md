@@ -1,4 +1,4 @@
-# Aeroport · Personal — dashboard pentru personalul aeroportului
+# Aeroport · Personal - dashboard pentru personalul aeroportului
 
 Proiect de hackathon (48h, 4 persoane). Planificarea turelor, zona angajatului, zona adminului,
 **modul de simulare (sandbox)** și un **asistent AI local (Ollama)** cu tool calling.
