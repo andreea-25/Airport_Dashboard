@@ -1,8 +1,7 @@
 # AeroShift - dashboard pentru personalul aeroportului
 
 Proiect de hackathon (48h, 4 persoane). Planificarea turelor, zona angajatului, zona adminului,
-**modul de simulare (sandbox)** și un **asistent AI** cu tool calling: în cloud cu **Gemini** (Google, cheie gratuită)
-sau local cu **Ollama** (datele nu ies din calculator).
+**modul de simulare (sandbox)** și un **asistent AI** cu tool calling: în cloud cu **Gemini** (Google, cheie gratuită).
 
 Stack: **Next.js 15 (App Router) + TypeScript + Prisma 7 + PostgreSQL + Tailwind + Recharts**.
 Interfața este în română (texte în `src/lib/i18n/ro.ts`).
@@ -309,29 +308,6 @@ src/app/(app)/      paginile (angajat + admin)
 scripts/mock-ollama.mjs, scripts/ai-ping.ts + ai-ping.cmd (diagnostic Gemini)
 ```
 
-## Decizii luate (de revizuit cu echipa)
-
-- Angajații văd doar turele echipei lor. Schimburile de tură le aprobă doar adminul.
-- Scenariile sunt doar pentru vizualizare (aplicarea peste programul real = stretch goal).
-- Comentariile pot fi șterse de autor în primele 10 minute. Adminul răspunde pe fir.
-- Necesarul de personal are granularitate de 1h (`StaffingRequirement.startHour/endHour`).
-- Notificări doar în aplicație (fără email).
-- Limba engleză e un skill cu nivel 1 = A2, 2 = B1, 3 = B2/C1.
-- „Tură fără lider”: în pagina **Ture** = nimeni bifat ca lider (un singur lider pe tură); în **Simulare** (scor și încălcări) = nicio persoană de nivel ≥ Senior în tură (`rules.leadMinRank`).
-- Chatul AI din Simulare: o conversație per admin și scenariu; „Conversație nouă” și „Sugerează-mi un scenariu” o șterg definitiv. Primul mesaj din „Sugerează-mi un scenariu” e un text fix (instant, fără cotă AI), salvat ca răspuns ca modelul să-l vadă.
-- „Șterge” la sugestii = ștergere definitivă (oricare ar fi statusul); dacă sugestia fusese aplicată, modificările rămân în scenariu (se anulează cu Undo).
-- 11 departamente: cele 8 inițiale + Turn de control (ATC), Meteorologie aeronautică (MET), Coordonare platformă / Apron (APR).
-- Semafor pe orizont de 30/60/90 de zile. Roșu = pleacă în perioadă (demisie / final de contract), lipsește ≥ jumătate din perioadă
-  (minim 21 de zile) sau o certificare obligatorie a expirat / expiră în 14 zile. Portocaliu = absență mai scurtă, certificare de
-  reînnoit în perioadă sau plecare în cele 30 de zile de după. Suprascrierea manuală a adminului are prioritate cât e valabilă.
-- Necesarul de oameni al unui departament = ore-om pe săptămână din profilul de acoperire / 40h × 1,2 (zile libere, concedii).
-- Zilele de pregătire sunt pe skill (`Skill.trainingDays`, ex. AVSEC 10, raze X 15/nivel, licență ATC 240); reînnoirea unei
-  certificări = ~30% din curs (2–10 zile). Prelungirea propusă implicit: 30 de zile (necesită acordul persoanei).
-- Foștii angajați nu se șterg: rămân în baza de date cu `active = false`, `leftAt`, `leaveReason`, `rehireEligible`, `leaveNote`.
-  La reactivare, aceste câmpuri se golesc (plecarea rămâne în jurnalul de modificări).
-- Reangajarea simulată: persoana urmează programul echipei alese, 5 ture pe săptămână, din ziua în care e gata (după reînnoiri).
-- Sugestiile de proiecte folosesc șabloane pe departament legate de instituții din Craiova; pentru ATC și meteo se adaugă școli
-  de aviație / facultăți de fizică din alte orașe, pentru că în Craiova nu există aceste specializări.
 
 ## Note tehnice
 
