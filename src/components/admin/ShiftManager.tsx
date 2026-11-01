@@ -68,14 +68,16 @@ export default function ShiftManager(p: Props) {
             <div className="text-xs font-semibold uppercase text-slate-500">{d.label}</div>
             {p.shifts.filter((s) => s.date === d.date).map((s) => {
               const low = s.assignments.length < s.required;
-              const noLead = !s.assignments.some((a) => a.rank >= 3);
+              const lead = s.assignments.find((a) => a.isLead);
+              const noSenior = s.assignments.length > 0 && !s.assignments.some((a) => a.rank >= 3);
               return (
                 <button key={s.id} onClick={() => setOpen(open === s.id ? null : s.id)}
                   className={clsx("w-full rounded-lg border bg-white p-2 text-left text-xs shadow-sm hover:border-brand-500", open === s.id && "ring-2 ring-brand-500")}>
                   <div className="flight-board font-semibold">{s.start}–{s.end}</div>
                   <div className="text-slate-500">{s.teamName}</div>
                   <div className={clsx("mt-1 font-medium", low ? "text-red-600" : "text-emerald-700")}>{s.assignments.length}/{s.required} {ro.admin.people}</div>
-                  {noLead && <div className="text-red-600">{ro.shifts.noLead}</div>}
+                  {lead ? <div className="truncate text-slate-700">★ {lead.name}</div> : <div className="text-red-600">{ro.shifts.noLead}</div>}
+                  {noSenior && <div className="text-amber-700">{ro.shifts.noSenior}</div>}
                 </button>
               );
             })}

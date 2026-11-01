@@ -1,7 +1,7 @@
 /** All Romanian UI strings. Components import from here instead of hardcoding text. */
 export const ro = {
   app: {
-    name: "Aeroport · Personal",
+    name: "AeroShift",
     tagline: "Planificarea turelor pentru Aeroportul Regional",
   },
   common: {
@@ -79,6 +79,7 @@ export const ro = {
     colleagues: "Cine lucrează în tura asta",
     lead: "Lider de tură",
     noLead: "Tura nu are lider desemnat",
+    noSenior: "Niciun Senior în tură",
     level: "Nivel",
     teamShifts: "Turele echipei mele",
     you: "tu",
@@ -269,9 +270,33 @@ export const ro = {
     aiPromptPlaceholder: "ex. „Rezolvă golurile de la securitate dimineața” sau „Ce s-ar întâmpla dacă trecem handlingul pe ture de 12h?”",
     applySuggestion: "Aplică în scenariu",
     dismiss: "Ignoră",
+    deleteSuggestion: "Șterge",
+    deleteConfirm: "Sigur? Șterge",
+    deleted: "Sugestia a fost ștearsă.",
     estimatedImpact: "Impact estimat (calculat de motorul de simulare)",
     noSuggestions: "Nicio sugestie încă.",
-    rulesFallback: "AI-ul nu e disponibil — am salvat cele mai bune variante găsite de optimizator (fără AI).",
+    rulesFallback: "AI-ul nu e disponibil — am salvat cele mai bune variante găsite de optimizator (fără AI). Le găsești în tab-ul Optimizator.",
+    optimizerSuggestions: "Sugestii salvate de optimizator",
+    chat: {
+      title: "Asistent AI",
+      intro: "Întreabă despre scenariu sau cere îmbunătățiri. Conversația se salvează pentru acest scenariu.",
+      empty: "Nicio întrebare încă. Exemple:",
+      examples: ["Rezolvă golurile de la securitate dimineața", "Cine e pe roșu în următoarele 30 de zile?", "Ce fac dacă pleacă un lider de tură de la handling?"],
+      defaultQuestion: "Analizează scenariul curent și propune 1–3 îmbunătățiri concrete.",
+      send: "Trimite",
+      newChat: "Conversație nouă",
+      confirmNew: "Sigur? Șterge conversația",
+      cleared: "Conversația a fost ștearsă. Poți începe de la capăt.",
+      suggestionsHint: "Sugestiile salvate de AI apar aici; le aplici sau le ștergi de aici.",
+      suggestScenario: "Sugerează-mi un scenariu",
+      suggestScenarioHelp: "Pornește o conversație nouă în care AI-ul te întreabă ce vrei, apoi salvează sugestiile aici.",
+      scenarioUserMsg: "Sugerează-mi un scenariu.",
+      scenarioQuestions: (depts: string) =>
+        `Sigur! Ca să-ți propun ceva potrivit, spune-mi:\n1. Pentru ce departament? (${depts} — sau „toate”)\n2. Ce vrei să îmbunătățesc? (ex. golurile de acoperire, ture fără lider, mai puține ore suplimentare, certificări care expiră)\n3. Contează o anumită perioadă sau zi? (ex. dimineața, weekendul)\n4. E cineva pe care să nu-l mut?\nPoți răspunde liber, într-un singur mesaj.`,
+      replaceConfirm: "Pornești o conversație nouă pentru un scenariu? Conversația de acum se șterge.",
+      yes: "Da, începe",
+      no: "Nu",
+    },
     statuses: { PENDING: "În așteptare", APPLIED: "Aplicată", DISMISSED: "Ignorată" },
     violationTypes: {
       REST_TOO_SHORT: "Repaus insuficient",
@@ -284,7 +309,7 @@ export const ro = {
     score: "Scor scenariu",
     scoreHelp: "0–100: acoperire 45%, încălcări 25%, ore suplimentare 15%, certificări 15%",
     scoreParts: { coverage: "Acop.", violations: "Reguli", overtime: "Ore s.", certifications: "Cert." },
-    tabs: { overview: "Panou", calendar: "Calendar", optimize: "Optimizare & AI", whatif: "Ce-ar fi dacă", fairness: "Echitate" },
+    tabs: { overview: "Panou", calendar: "Calendar", optimize: "Optimizator", ai: "Asistent AI", whatif: "Ce-ar fi dacă", fairness: "Echitate" },
     cal: {
       hint: "Trage un om dintr-o tură în alta (aceeași zi sau altă zi). Trage din lista din dreapta ca să adaugi pe cineva. × îl scoate din tură, ★ îl face lider.",
       pool: "Personal",

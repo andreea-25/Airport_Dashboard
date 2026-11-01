@@ -29,12 +29,9 @@ async function handle(req: Request) {
   const scenario = await prisma.scenario.findUnique({ where: { id: scenarioId } });
   if (!scenario) return NextResponse.json({ error: "Scenariu inexistent" }, { status: 404 });
 
-  let conversationId = parsed.data.conversationId ?? null;
-  if (conversationId) {
-    const c = await prisma.aiConversation.findUnique({ where: { id: conversationId } });
-    if (!c || c.userId !== session.userId || c.scenarioId !== scenarioId) conversationId = null;
-  }
-  conversationId ??= (await prisma.aiConversation.create({ data: { userId: session.userId, mode: "ADMIN_SIM", scenarioId } })).id;
+  // one saved conversation per admin and scenario (the latest one); "new conversation" deletes it
+  const existing = await prisma.aiConversation.findFirst({ where: { userId: session.userId, scenarioId, mode: "ADMIN_SIM" }, orderBy: { createdAt: "desc" } });
+  const conversationId = existing?.id ?? (await prisma.aiConversation.create({ data: { userId: session.userId, mode: "ADMIN_SIM", scenarioId } })).id;
 
   const before = new Date();
   const message = prompt?.trim()
@@ -59,6 +56,9 @@ async function handle(req: Request) {
       return NextResponse.json({ error: ro.assistant.unavailable, detail: `${e.message} · optimizator: ${(e2 as Error).message}` }, { status: 503 });
     }
     await audit(session.userId, "Scenario", scenarioId, "OPTIMIZER_SUGGEST", { created: saved, reason: e.message });
-    return NextResponse.json({ source: "OPTIMIZER", conversationId, reply: `${ro.sim.rulesFallback}\nMotiv: ${e.message}`, created: saved });
+    const reply = `${ro.sim.rulesFallback}\nMotiv: ${e.message}`;
+    // saved in the chat history, but never sent to the model (role "notice")
+    await prisma.aiMessage.create({ data: { conversationId, role: "notice", content: reply } });
+    return NextResponse.json({ source: "OPTIMIZER", conversationId, reply, created: saved });
   }
 }

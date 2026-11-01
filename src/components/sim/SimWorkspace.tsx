@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import Link from "next/link";
@@ -7,10 +7,12 @@ import {
   applyScenarioToReal,
   applySimChanges,
   applySuggestion,
+  deleteSuggestion,
   dismissSuggestion,
   previewSimChange,
   skillGapAction,
   undoSimChange,
+  type SimChatMsg,
   type SimView,
 } from "@/app/actions/simulation";
 import type { Comparison } from "@/lib/sim/evaluate";
@@ -24,6 +26,7 @@ import ScenarioCalendar from "./ScenarioCalendar";
 import OptimizerPanel from "./OptimizerPanel";
 import WhatIfPanel from "./WhatIfPanel";
 import FairnessPanel from "./FairnessPanel";
+import SimChat from "./SimChat";
 
 type Dept = { id: string; name: string; code: string };
 type Team = { id: string; name: string; departmentId: string };
@@ -33,6 +36,7 @@ type Props = {
   scenario: { id: string; name: string; period: string; notes: string | null };
   view: SimView;
   history: { id: string; type: string; message: string; createdAt: string }[];
+  chat: SimChatMsg[];
   suggestions: Suggestion[];
   departments: Dept[];
   teams: Team[];
@@ -44,7 +48,7 @@ type Props = {
   settings: ScenarioSettings;
 };
 
-type Tab = "overview" | "calendar" | "optimize" | "whatif" | "fairness";
+type Tab = "overview" | "calendar" | "optimize" | "ai" | "whatif" | "fairness";
 
 export default function SimWorkspace(p: Props) {
   const router = useRouter();
@@ -53,6 +57,7 @@ export default function SimWorkspace(p: Props) {
   const [preview, setPreview] = useState<{ messages: string[]; impact: Comparison } | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [applyOpen, setApplyOpen] = useState(false);
+  const [scenarioAsk, setScenarioAsk] = useState(0);
 
   const showFlash = (ok: boolean, text: string) => {
     setFlash({ kind: ok ? "ok" : "err", text });
@@ -82,7 +87,15 @@ export default function SimWorkspace(p: Props) {
     });
 
   const tabs: [Tab, string][] = Object.entries(ro.sim.tabs) as [Tab, string][];
-  const pendingSugg = p.suggestions.filter((s) => s.status === "PENDING").length;
+  const aiSugg = p.suggestions.filter((s) => s.source === "AI");
+  const optSugg = p.suggestions.filter((s) => s.source !== "AI");
+  const pendingCount: Partial<Record<Tab, number>> = {
+    optimize: optSugg.filter((s) => s.status === "PENDING").length,
+    ai: aiSugg.filter((s) => s.status === "PENDING").length,
+  };
+  const applySugg = (id: string) => run(() => applySuggestion(id));
+  const dismissSugg = (id: string) => run(async () => ({ ...(await dismissSuggestion(id)), message: ro.sim.statuses.DISMISSED }));
+  const deleteSugg = (id: string) => run(() => deleteSuggestion(id));
 
   return (
     <div className="space-y-5">
@@ -118,7 +131,7 @@ export default function SimWorkspace(p: Props) {
         {tabs.map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)} className={clsx("-mb-px border-b-2 px-3 py-2 text-sm font-medium", tab === k ? "border-brand-600 text-brand-700" : "border-transparent text-slate-500 hover:text-slate-800")}>
             {label}
-            {k === "optimize" && pendingSugg > 0 && <span className="ml-1.5 rounded-full bg-violet-600 px-1.5 text-[11px] text-white">{pendingSugg}</span>}
+            {(pendingCount[k] ?? 0) > 0 && <span className="ml-1.5 rounded-full bg-violet-600 px-1.5 text-[11px] text-white">{pendingCount[k]}</span>}
           </button>
         ))}
       </div>
@@ -164,9 +177,31 @@ export default function SimWorkspace(p: Props) {
       {tab === "optimize" && (
         <div className="grid gap-5 2xl:grid-cols-2">
           <OptimizerPanel scenarioId={p.scenario.id} departments={p.departments} employees={p.employees} pending={pending} onApply={applyBatch} onFlash={showFlash} />
-          <SuggestionsPanel scenarioId={p.scenario.id} suggestions={p.suggestions} pending={pending} onApply={(id) => run(() => applySuggestion(id))} onDismiss={(id) => run(async () => ({ ...(await dismissSuggestion(id)), message: ro.sim.statuses.DISMISSED }))} />
+          <SuggestionsPanel title={ro.sim.optimizerSuggestions} suggestions={optSugg} pending={pending} onApply={applySugg} onDismiss={dismissSugg} onDelete={deleteSugg} />
         </div>
       )}
+
+      {/* the chat stays mounted when switching tabs, so a running question isn't lost */}
+      <div className={clsx("grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]", tab !== "ai" && "hidden")}>
+        <SimChat scenarioId={p.scenario.id} initial={p.chat} scenarioAsk={scenarioAsk} />
+        <SuggestionsPanel
+          title={`✦ ${ro.sim.aiSuggestions}`}
+          hint={ro.sim.chat.suggestionsHint}
+          suggestions={aiSugg}
+          pending={pending}
+          onApply={applySugg}
+          onDismiss={dismissSugg}
+          onDelete={deleteSugg}
+          footer={
+            <div className="border-t border-slate-100 pt-3">
+              <button className="btn-primary w-full bg-violet-600 hover:bg-violet-700" onClick={() => setScenarioAsk((n) => n + 1)}>
+                ✦ {ro.sim.chat.suggestScenario}
+              </button>
+              <p className="muted mt-1 text-center text-xs">{ro.sim.chat.suggestScenarioHelp}</p>
+            </div>
+          }
+        />
+      </div>
 
       {tab === "whatif" && (
         <WhatIfPanel
@@ -424,44 +459,13 @@ function SkillGapPanel({ scenarioId, employees, departments, levels }: { scenari
 
 // ---------------------------------------------------------------- AI suggestions
 
-function SuggestionsPanel({ scenarioId, suggestions, pending, onApply, onDismiss }: { scenarioId: string; suggestions: Suggestion[]; pending: boolean; onApply: (id: string) => void; onDismiss: (id: string) => void }) {
-  const router = useRouter();
-  const [prompt, setPrompt] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [conv, setConv] = useState<string | null>(null);
-  const [reply, setReply] = useState<{ source: string; text: string; tools?: string[] } | null>(null);
-  const ask = async () => {
-    setBusy(true);
-    setReply(null);
-    try {
-      const res = await fetch("/api/admin/sim/suggest", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scenarioId, prompt, conversationId: conv }) });
-      const j = await res.json().catch(() => ({ error: `${ro.common.errorGeneric} (HTTP ${res.status})` }));
-      if (!res.ok) setReply({ source: "ERR", text: [j.error ?? ro.common.errorGeneric, j.detail].filter(Boolean).join("\n") });
-      else {
-        setConv(j.conversationId);
-        setReply({ source: j.source, text: j.reply, tools: j.toolCalls?.map((t: { name: string }) => t.name) });
-        setPrompt("");
-      }
-      router.refresh();
-    } finally {
-      setBusy(false);
-    }
-  };
+function SuggestionsPanel({ title, hint, suggestions, pending, onApply, onDismiss, onDelete, footer }: { title: string; hint?: string; suggestions: Suggestion[]; pending: boolean; onApply: (id: string) => void; onDismiss: (id: string) => void; onDelete: (id: string) => void; footer?: React.ReactNode }) {
   return (
     <section className="card card-pad space-y-3 border-violet-200">
-      <div className="flex items-center justify-between">
-        <h2 className="h2">✦ {ro.sim.aiSuggestions}</h2>
+      <div>
+        <h2 className="h2">{title}</h2>
+        {hint && <p className="muted text-xs">{hint}</p>}
       </div>
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <input className="input" value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={ro.sim.aiPromptPlaceholder} onKeyDown={(e) => e.key === "Enter" && !busy && ask()} />
-        <button className="btn-primary whitespace-nowrap bg-violet-600 hover:bg-violet-700" disabled={busy} onClick={ask}>{busy ? ro.assistant.thinking : ro.sim.askAi}</button>
-      </div>
-      {reply && (
-        <div className={clsx("rounded-lg px-3 py-2 text-sm", reply.source === "ERR" ? "bg-red-50 text-red-800" : "bg-violet-50 text-slate-800")}>
-          <p className="whitespace-pre-wrap">{reply.text}</p>
-          {reply.tools && reply.tools.length > 0 && <p className="mt-1 text-xs text-slate-500">{ro.assistant.toolsUsed}: {reply.tools.join(", ")}</p>}
-        </div>
-      )}
       {suggestions.length === 0 && <p className="muted">{ro.sim.noSuggestions}</p>}
       <div className="space-y-2">
         {suggestions.map((s) => {
@@ -480,17 +484,40 @@ function SuggestionsPanel({ scenarioId, suggestions, pending, onApply, onDismiss
                 <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">{ro.sim.estimatedImpact}</div>
                 <ImpactLines impact={imp} />
               </div>
-              {s.status === "PENDING" && (
-                <div className="mt-2 flex gap-2">
-                  <button className="btn-primary btn-sm" disabled={pending} onClick={() => onApply(s.id)}>{ro.sim.applySuggestion}</button>
-                  <button className="btn-ghost btn-sm" disabled={pending} onClick={() => onDismiss(s.id)}>{ro.sim.dismiss}</button>
-                </div>
-              )}
+              <div className="mt-2 flex flex-wrap gap-2">
+                {s.status === "PENDING" && (
+                  <>
+                    <button className="btn-primary btn-sm" disabled={pending} onClick={() => onApply(s.id)}>{ro.sim.applySuggestion}</button>
+                    <button className="btn-ghost btn-sm" disabled={pending} onClick={() => onDismiss(s.id)}>{ro.sim.dismiss}</button>
+                  </>
+                )}
+                <DeleteButton disabled={pending} onConfirm={() => onDelete(s.id)} />
+              </div>
             </div>
           );
         })}
       </div>
+      {footer}
     </section>
+  );
+}
+
+/** Two clicks: "Șterge" → "Sigur? Șterge" (reverts after 4 s). */
+function DeleteButton({ disabled, onConfirm }: { disabled: boolean; onConfirm: () => void }) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  return (
+    <button
+      className={clsx("btn-sm ml-auto", armed ? "btn-primary bg-red-600 hover:bg-red-700" : "btn-ghost text-red-700 hover:bg-red-50")}
+      disabled={disabled}
+      onClick={() => (armed ? (setArmed(false), onConfirm()) : setArmed(true))}
+    >
+      🗑 {armed ? ro.sim.deleteConfirm : ro.sim.deleteSuggestion}
+    </button>
   );
 }
 

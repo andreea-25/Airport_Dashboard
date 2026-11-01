@@ -280,3 +280,89 @@ export async function applyScenarioToReal(scenarioId: string, confirmName: strin
     return err(e);
   }
 }
+
+// ---------------------------------------------------------------- AI chat (one conversation per admin and scenario)
+
+export type SimChatMsg = { id: string; kind: "user" | "bot" | "notice"; text: string; tools?: string[]; at: string };
+
+/** The admin's latest conversation about this scenario, as chat bubbles (tool results are hidden; tool names are shown). */
+export async function getSimChat(scenarioId: string): Promise<SimChatMsg[]> {
+  const s = await assertAdmin();
+  const conv = await prisma.aiConversation.findFirst({
+    where: { userId: s.userId, scenarioId, mode: "ADMIN_SIM" },
+    orderBy: { createdAt: "desc" },
+    include: { messages: { orderBy: { createdAt: "asc" } } },
+  });
+  if (!conv) return [];
+  const out: SimChatMsg[] = [];
+  let tools: string[] = [];
+  for (const m of conv.messages) {
+    const at = m.createdAt.toISOString();
+    if (m.role === "user") {
+      tools = [];
+      out.push({ id: m.id, kind: "user", text: m.content, at });
+    } else if (m.role === "tool") {
+      const name = (m.toolCalls as { name?: string } | null)?.name;
+      if (name) tools.push(name);
+    } else if (m.role === "assistant" && m.content.trim() && !(m.toolCalls as { calls?: unknown[] } | null)?.calls?.length) {
+      out.push({ id: m.id, kind: "bot", text: m.content, tools: tools.length ? tools : undefined, at });
+      tools = [];
+    } else if (m.role === "notice") {
+      out.push({ id: m.id, kind: "notice", text: m.content, at });
+    }
+  }
+  return out;
+}
+
+/** "New conversation": delete this admin's conversations about the scenario. Saved suggestions stay. */
+export async function resetSimChat(scenarioId: string): Promise<R<{ message: string }>> {
+  try {
+    const s = await assertAdmin();
+    const { count } = await prisma.aiConversation.deleteMany({ where: { userId: s.userId, scenarioId, mode: "ADMIN_SIM" } });
+    await audit(s.userId, "Scenario", scenarioId, "AI_CHAT_RESET", { conversations: count });
+    return { ok: true, message: ro.sim.chat.cleared };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Delete a saved suggestion for good (any status). */
+export async function deleteSuggestion(suggestionId: string): Promise<R<{ message: string }>> {
+  try {
+    const s = await assertAdmin();
+    const sug = await prisma.scenarioSuggestion.delete({ where: { id: suggestionId } });
+    await audit(s.userId, "ScenarioSuggestion", suggestionId, "DELETE", { scenarioId: sug.scenarioId, source: sug.source, rationale: sug.rationale });
+    revalidatePath(`/admin/simulation/${sug.scenarioId}`);
+    return { ok: true, message: ro.sim.deleted };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/**
+ * "Suggest me a scenario": a new conversation that starts with the AI asking what the admin wants.
+ * The opening question is fixed text (instant, no AI quota) but saved like a normal answer,
+ * so the model sees it as context when the admin replies.
+ */
+export async function startScenarioChat(scenarioId: string): Promise<R<{ messages: SimChatMsg[] }>> {
+  try {
+    const s = await assertAdmin();
+    await prisma.aiConversation.deleteMany({ where: { userId: s.userId, scenarioId, mode: "ADMIN_SIM" } });
+    const depts = await prisma.department.findMany({ orderBy: { code: "asc" }, select: { code: true, name: true } });
+    const conv = await prisma.aiConversation.create({ data: { userId: s.userId, mode: "ADMIN_SIM", scenarioId } });
+    const u = await prisma.aiMessage.create({ data: { conversationId: conv.id, role: "user", content: ro.sim.chat.scenarioUserMsg } });
+    const a = await prisma.aiMessage.create({
+      data: { conversationId: conv.id, role: "assistant", content: ro.sim.chat.scenarioQuestions(depts.map((d) => `${d.code} – ${d.name}`).join(", ")), createdAt: new Date(u.createdAt.getTime() + 1) },
+    });
+    await audit(s.userId, "Scenario", scenarioId, "AI_SCENARIO_CHAT");
+    return {
+      ok: true,
+      messages: [
+        { id: u.id, kind: "user", text: u.content, at: u.createdAt.toISOString() },
+        { id: a.id, kind: "bot", text: a.content, at: a.createdAt.toISOString() },
+      ],
+    };
+  } catch (e) {
+    return err(e);
+  }
+}

@@ -18,7 +18,7 @@ export default async function AdminShiftsPage({ searchParams }: { searchParams: 
   const [shifts, teams, employees, positions, templates, staffing] = await Promise.all([
     prisma.shift.findMany({
       where: { departmentId: dept.id, startAt: { gte: from, lt: to } },
-      include: { team: true, assignments: { include: { employee: { include: { level: true, skills: true } }, position: { include: { skills: { include: { skill: true } } } } } } },
+      include: { team: true, assignments: { include: { employee: { include: { level: true, skills: true } }, position: { include: { skills: { include: { skill: true } } } } }, orderBy: [{ employee: { lastName: "asc" } }, { employee: { firstName: "asc" } }] } },
       orderBy: { startAt: "asc" },
     }),
     prisma.team.findMany({ where: { departmentId: dept.id }, orderBy: { name: "asc" } }),

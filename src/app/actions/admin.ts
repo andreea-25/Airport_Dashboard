@@ -250,7 +250,11 @@ export async function updateAssignment(id: string, data: { positionId?: string |
   try {
     const s = await assertAdmin();
     const before = await prisma.shiftAssignment.findUniqueOrThrow({ where: { id } });
-    const after = await prisma.shiftAssignment.update({ where: { id }, data });
+    // one designated lead per shift: choosing a new lead removes the flag from the previous one
+    const after = await prisma.$transaction(async (tx) => {
+      if (data.isLead) await tx.shiftAssignment.updateMany({ where: { shiftId: before.shiftId, id: { not: id }, isLead: true }, data: { isLead: false } });
+      return tx.shiftAssignment.update({ where: { id }, data });
+    });
     await audit(s.userId, "ShiftAssignment", id, "UPDATE", changedFields(before, after));
     revalidatePath("/admin/shifts");
     return { ok: true };

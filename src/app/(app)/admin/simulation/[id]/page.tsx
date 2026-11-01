@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { requireAdminPage } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { fmt, localTimeStr } from "@/lib/time";
-import { getHistory, getSimPageData, getSuggestions } from "@/app/actions/simulation";
+import { getHistory, getSimChat, getSimPageData, getSuggestions } from "@/app/actions/simulation";
 import SimWorkspace from "@/components/sim/SimWorkspace";
 
 export default async function ScenarioPage({ params }: { params: Promise<{ id: string }> }) {
@@ -10,7 +10,7 @@ export default async function ScenarioPage({ params }: { params: Promise<{ id: s
   const { id } = await params;
   const scenario = await prisma.scenario.findUnique({ where: { id } });
   if (!scenario) notFound();
-  const [{ view, data, calendar, settings }, history, suggestions] = await Promise.all([getSimPageData(id), getHistory(id), getSuggestions(id)]);
+  const [{ view, data, calendar, settings }, history, suggestions, chat] = await Promise.all([getSimPageData(id), getHistory(id), getSuggestions(id), getSimChat(id)]);
   const departments = Object.values(data.departments).sort((a, b) => a.name.localeCompare(b.name, "ro"));
   const startTimes: Record<string, string[]> = {};
   for (const s of data.shifts) {
@@ -24,6 +24,7 @@ export default async function ScenarioPage({ params }: { params: Promise<{ id: s
       scenario={{ id, name: scenario.name, notes: scenario.notes, period: `${fmt(scenario.periodStart, "dd.MM")} – ${fmt(new Date(scenario.periodEnd.getTime() - 1), "dd.MM.yyyy")}` }}
       view={view}
       history={history}
+      chat={chat}
       suggestions={suggestions.map((s) => ({ id: s.id, source: s.source, rationale: s.rationale, status: s.status, changes: s.changes, estimatedImpact: s.estimatedImpact, createdAt: s.createdAt }))}
       departments={departments}
       teams={Object.values(data.teams).sort((a, b) => a.name.localeCompare(b.name))}

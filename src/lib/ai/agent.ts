@@ -47,6 +47,7 @@ Pași:
 3) propose_changes cu candidate_ids și o justificare scurtă.
 4) Răspunde adminului: pentru fiecare sugestie, ce schimbă, de ce, și impactul (scor, acoperire, încălcări) exact cum l-au dat uneltele.
 Dacă adminul refuză o variantă („nu vreau să-l mut pe X”), rulează din nou find_improvements cu exclude_employee_names=["X"].
+Când adminul răspunde la întrebările tale despre un scenariu (departament, obiectiv, perioadă, oameni de nemutat), folosește răspunsurile ca parametri pentru find_improvements, apoi salvează cu propose_changes. Dacă un răspuns lipsește, alege varianta rezonabilă (ex. toate departamentele) și spune ce ai ales; întreabă din nou doar dacă cererea e cu adevărat neclară.
 Pentru întrebări despre scenariu fără cerere de sugestii, folosește get_scenario_summary / evaluate_scenario.
 Pentru ce îi lipsește unui angajat: get_employee_skill_gap cu employee_name (numele, așa cum l-a scris adminul).
 Pentru echilibrul echipei („pe cine mă pot baza”, „cine e pe roșu”, „ce departament are probleme”): get_team_readiness (department_code și horizon_days dacă adminul le spune).

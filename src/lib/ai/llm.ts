@@ -4,13 +4,14 @@ import { geminiChat, geminiConfig, geminiHealth } from "./gemini";
 /**
  * Picks the AI provider from .env:
  *   AI_PROVIDER="ollama" (default, local) | "gemini" (Google, needs GEMINI_API_KEY)
- *   AI_FALLBACK="ollama" — if Gemini fails (no internet, quota), try local Ollama. Default: on when AI_PROVIDER=gemini.
+ *   AI_FALLBACK="ollama" — if Gemini fails (no internet, quota), try local Ollama. Default "none": an unexpected
+ *   Ollama load can freeze a laptop, so it has to be switched on explicitly.
  */
 export type Provider = "ollama" | "gemini";
 
 export function llmConfig() {
   const provider: Provider = process.env.AI_PROVIDER?.trim().toLowerCase() === "gemini" ? "gemini" : "ollama";
-  const fallback = provider === "gemini" && (process.env.AI_FALLBACK?.trim().toLowerCase() ?? "ollama") === "ollama";
+  const fallback = provider === "gemini" && process.env.AI_FALLBACK?.trim().toLowerCase() === "ollama";
   const model = provider === "gemini" ? geminiConfig().model : ollamaConfig().model;
   // rough size of what we may send (characters; ~3 chars per token for Romanian)
   const maxPromptChars = provider === "gemini" ? 120_000 : Math.max(8000, ollamaConfig().numCtx * 3 - 4000);
