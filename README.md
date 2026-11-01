@@ -6,6 +6,8 @@ Proiect de hackathon (48h, 4 persoane). Planificarea turelor, zona angajatului, 
 Stack: **Next.js 15 (App Router) + TypeScript + Prisma 7 + PostgreSQL + Tailwind + Recharts**.
 Interfața este în română (texte în `src/lib/i18n/ro.ts`).
 
+Link către dashboard: https://neighborhood-prairie-shirts-cast.trycloudflare.com/login
+
 ## Cerințe
 
 | Ce | Versiune | Obligatoriu? | De unde |
